@@ -101,17 +101,14 @@ def get_employee_requests(employee_id: str, daily_data: List[Dict] = None, start
 
 def analyze_file(path: str, sheet_name: Optional[str] = None) -> Dict[str, Any]:
     """
-    تحليل ملف الحضور وإرجاع معلومات أساسية قبل المعالجة
+    تحليل ملف الحضور وإرجاع معلومات أساسية عنه
     """
-    print(f"🔍 بدء تحليل الملف: {path}")
     try:
         wb = load_workbook(path, data_only=True, read_only=True)
         ws = wb[sheet_name] if sheet_name else wb.worksheets[0]
-        print(f"📊 تم فتح الملف: ورقة '{ws.title}', الصفوف: {ws.max_row}, الأعمدة: {ws.max_column}")
         
         rows = list(ws.iter_rows(values_only=False))
         nrows = len(rows)
-        print(f"📋 عدد الصفوف المقروءة: {nrows}")
         
         # البحث عن الموظفين
         employees_found = 0
@@ -124,43 +121,65 @@ def analyze_file(path: str, sheet_name: Optional[str] = None) -> Dict[str, Any]:
         while r < nrows:
             row_cells = list(rows[r])
             header = parse_employee_header(row_cells)
-            
             if not header:
                 r += 1
                 continue
                 
             employees_found += 1
             
-            # تحديد نوع الملف من أول موظف
-            if employees_found == 1:
-                if r + 1 < nrows and detect_is_timecard_header(rows[r+1]):
+            # تحديد نوع الملف
+            if r + 1 < nrows:
+                if detect_is_timecard_header(rows[r+1]):
                     file_format = "timecard"
                 else:
                     file_format = "legacy"
             
             # جمع التواريخ من بيانات الموظف
-            next_idx = r + 1
-            while next_idx < nrows:
-                next_row_cells = list(rows[next_idx])
-                next_header = parse_employee_header(next_row_cells)
-                if next_header:  # وصلنا للموظف التالي
+            data_start = r + 1
+            if file_format == "timecard":
+                data_start = r + 2  # تخطي header الـ timecard
+            
+            # البحث عن التواريخ في البيانات
+            for i in range(data_start, min(data_start + 50, nrows)):  # فحص أول 50 صف فقط
+                if i >= nrows:
                     break
                     
-                # محاولة استخراج التاريخ من الصف
-                for cell in next_row_cells[:3]:  # أول 3 أعمدة عادة تحتوي على التاريخ
-                    cell_value = cell_text(cell)
-                    if cell_value:
+                row_cells = list(rows[i])
+                if not row_cells or not row_cells[0].value:
+                    break
+                    
+                # محاولة استخراج التاريخ من العمود الأول
+                try:
+                    cell_value = row_cells[0].value
+                    if isinstance(cell_value, datetime):
+                        date_obj = cell_value.date()
+                        all_dates.add(date_obj)
+                    elif isinstance(cell_value, str):
                         # محاولة تحويل النص إلى تاريخ
-                        parsed_date = parse_date_flexible(cell_value)
-                        if parsed_date:
-                            all_dates.add(parsed_date)
-                            break
-                            
-                next_idx += 1
+                        for fmt in ['%Y-%m-%d', '%d/%m/%Y', '%m/%d/%Y', '%d-%m-%Y']:
+                            try:
+                                date_obj = datetime.strptime(cell_value, fmt).date()
+                                all_dates.add(date_obj)
+                                break
+                            except ValueError:
+                                continue
+                except:
+                    continue
             
-            r = next_idx
+            # الانتقال للموظف التالي - البحث عن الموظف التالي
+            r = data_start
+            # البحث عن نهاية بيانات الموظف الحالي
+            while r < nrows:
+                row_cells = list(rows[r])
+                if not row_cells or not row_cells[0].value:
+                    r += 1
+                    break
+                # إذا وجدنا موظف جديد، توقف
+                if parse_employee_header(row_cells):
+                    break
+                r += 1
         
-        # تحديد أول وآخر تاريخ
+        # حساب أول وآخر تاريخ
         if all_dates:
             first_date = min(all_dates)
             last_date = max(all_dates)
@@ -168,8 +187,11 @@ def analyze_file(path: str, sheet_name: Optional[str] = None) -> Dict[str, Any]:
         else:
             period_days = 0
         
-        result = {
-            "success": True,
+        # تحديد نوع الملف بشكل أفضل
+        if file_format == "unknown" and employees_found > 0:
+            file_format = "legacy"  # افتراض legacy إذا لم نتمكن من التحديد
+        
+        return {
             "employees_count": employees_found,
             "file_format": file_format,
             "first_date": first_date.strftime('%Y-%m-%d') if first_date else None,
@@ -177,16 +199,15 @@ def analyze_file(path: str, sheet_name: Optional[str] = None) -> Dict[str, Any]:
             "period_days": period_days,
             "total_rows": nrows,
             "sheet_name": ws.title,
-            "dates_found": len(all_dates)
+            "dates_found": len(all_dates),
+            "success": True
         }
         
-        print(f"✅ تم تحليل الملف بنجاح: {result}")
-        return result
-        
     except Exception as e:
-        print(f"❌ خطأ في تحليل الملف: {str(e)}")
+        print(f"❌ خطأ في تحليل الملف: {e}")
         import traceback
-        print(f"📋 تفاصيل الخطأ: {traceback.format_exc()}")
+        traceback.print_exc()
+        
         return {
             "success": False,
             "error": str(e),
@@ -194,37 +215,11 @@ def analyze_file(path: str, sheet_name: Optional[str] = None) -> Dict[str, Any]:
             "file_format": "unknown",
             "first_date": None,
             "last_date": None,
-            "period_days": 0
+            "period_days": 0,
+            "total_rows": 0,
+            "sheet_name": "غير معروف",
+            "dates_found": 0
         }
-
-
-def parse_date_flexible(date_str: str) -> Optional[date]:
-    """
-    محاولة تحويل نص إلى تاريخ بصيغ مختلفة
-    """
-    if not date_str or not isinstance(date_str, str):
-        return None
-        
-    date_str = date_str.strip()
-    
-    # صيغ التاريخ المختلفة
-    date_formats = [
-        '%Y-%m-%d',
-        '%d/%m/%Y',
-        '%m/%d/%Y',
-        '%d-%m-%Y',
-        '%Y/%m/%d',
-        '%d.%m.%Y',
-        '%Y.%m.%d'
-    ]
-    
-    for fmt in date_formats:
-        try:
-            return datetime.strptime(date_str, fmt).date()
-        except ValueError:
-            continue
-    
-    return None
 
 
 def parse_args():

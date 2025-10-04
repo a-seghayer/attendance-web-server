@@ -3,8 +3,9 @@ import os
 import sys
 import tempfile
 import zipfile
-from datetime import datetime
-from flask import Flask, request, jsonify, send_file
+from datetime import datetime, timedelta
+from functools import wraps
+from flask import request, jsonify, send_file
 from flask_cors import CORS
 from werkzeug.security import check_password_hash
 import jwt
@@ -876,13 +877,12 @@ def delete_request_endpoint():
 @app.route("/api/attendance/analyze", methods=["POST"])
 @require_auth("attendance")
 def analyze_attendance_file():
-    """تحليل ملف الحضور قبل المعالجة"""
+    """تحليل ملف الحضور وإرجاع معلومات أساسية"""
     try:
-        print(f"🔍 استقبال طلب تحليل ملف من {request.remote_addr}")
-        print(f"📋 معلومات الطلب: Content-Type: {request.content_type}, Content-Length: {request.content_length}")
+        print(f"🔍 استقبال طلب تحليل ملف الحضور من {request.remote_addr}")
         
         if "file" not in request.files:
-            return jsonify({"error": "لم يتم العثور على ملف في الطلب"}), 400
+            return jsonify({"error": "لم يتم رفع أي ملف"}), 400
         
         file = request.files["file"]
         if file.filename == "":
@@ -899,21 +899,28 @@ def analyze_attendance_file():
         try:
             # تحليل الملف
             sheet_name = request.form.get("sheet", None) or None
+            print(f"🔍 بدء تحليل الملف: {file.filename}, الورقة: {sheet_name}")
             
             from attendance_processor import analyze_file
-            analysis_result = analyze_file(temp_path, sheet_name)
             
-            print(f"📊 نتيجة التحليل: {analysis_result}")
+            analysis_result = analyze_file(temp_path, sheet_name)
             
             # إضافة معلومات إضافية
             analysis_result["file_name"] = file.filename
-            # حساب حجم الملف
-            file.seek(0, 2)  # الانتقال لنهاية الملف
-            file_size = file.tell()
-            file.seek(0)  # العودة للبداية
-            analysis_result["file_size"] = file_size
+            analysis_result["file_size"] = os.path.getsize(temp_path)
             
-            return jsonify(analysis_result)
+            print(f"✅ تم تحليل الملف بنجاح:")
+            print(f"   - عدد الموظفين: {analysis_result.get('employees_count', 0)}")
+            print(f"   - نوع الملف: {analysis_result.get('file_format', 'unknown')}")
+            print(f"   - أول تاريخ: {analysis_result.get('first_date', 'N/A')}")
+            print(f"   - آخر تاريخ: {analysis_result.get('last_date', 'N/A')}")
+            print(f"   - عدد الأيام: {analysis_result.get('period_days', 0)}")
+            
+            return jsonify({
+                "success": True,
+                "analysis": analysis_result,
+                "message": "تم تحليل الملف بنجاح"
+            })
             
         finally:
             # حذف الملف المؤقت
@@ -923,8 +930,11 @@ def analyze_attendance_file():
                 pass
                 
     except Exception as e:
-        print(f"❌ خطأ في تحليل الملف: {str(e)}")
-        return jsonify({"error": f"خطأ في تحليل الملف: {str(e)}"}), 500
+        print(f"❌ خطأ في تحليل الملف: {e}")
+        return jsonify({
+            "success": False,
+            "error": f"خطأ في تحليل الملف: {str(e)}"
+        }), 500
 
 
 @app.route("/api/attendance/process", methods=["POST"])
