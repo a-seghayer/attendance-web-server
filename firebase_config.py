@@ -366,21 +366,43 @@ def cancel_request(request_id, canceled_by):
         if not db:
             return False
             
-        # البحث عن الطلب بـ ID
-        requests_ref = db.collection('requests')
-        query = requests_ref.where('id', '==', int(request_id))
-        docs = list(query.stream())
-        
-        if docs:
-            doc_ref = docs[0].reference
-            doc_ref.update({
-                'status': 'canceled',
-                'canceledBy': canceled_by,
-                'canceledAt': datetime.utcnow().isoformat()
-            })
-            print(f"✅ تم إلغاء الطلب: {request_id}")
-            return True
+        # محاولة البحث بـ document ID أولاً
+        try:
+            doc_ref = db.collection('requests').document(request_id)
+            doc = doc_ref.get()
             
+            if doc.exists:
+                doc_ref.update({
+                    'status': 'canceled',
+                    'canceledBy': canceled_by,
+                    'canceledAt': datetime.utcnow()
+                })
+                print(f"✅ تم إلغاء الطلب: {request_id}")
+                return True
+        except:
+            # إذا فشل، جرب البحث بـ integer ID
+            pass
+            
+        # البحث عن الطلب بـ integer ID
+        requests_ref = db.collection('requests')
+        try:
+            query = requests_ref.where('id', '==', int(request_id))
+            docs = list(query.stream())
+            
+            if docs:
+                doc_ref = docs[0].reference
+                doc_ref.update({
+                    'status': 'canceled',
+                    'canceledBy': canceled_by,
+                    'canceledAt': datetime.utcnow()
+                })
+                print(f"✅ تم إلغاء الطلب: {request_id}")
+                return True
+        except ValueError:
+            # request_id ليس رقماً
+            pass
+            
+        print(f"❌ لم يتم العثور على الطلب: {request_id}")
         return False
         
     except Exception as e:

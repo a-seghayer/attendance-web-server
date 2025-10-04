@@ -158,6 +158,9 @@ def get_employee_leave_requests(employee_id, start_date, end_date):
         print(f"خطأ في جلب طلبات الإجازة للموظف {employee_id}: {e}")
         return 0
 
+# استيراد دوال Firebase من firebase_config
+from firebase_config import create_request, get_latest_requests, cancel_request
+
 app = Flask(__name__)
 CORS(app)  # Allow static site to call the API
 
@@ -598,6 +601,19 @@ def create_request_endpoint():
             "reason": reason,
             "supervisor": request.user.get("sub", "")
         }
+        
+        # إضافة ساعات الإضافي إذا كان النوع overtime
+        if kind == "overtime":
+            hours = data.get("hours", 0)
+            try:
+                request_data["hours"] = float(hours)
+            except (ValueError, TypeError):
+                return jsonify({"error": "ساعات الإضافي يجب أن تكون رقماً"}), 400
+        
+        # إضافة تاريخ النهاية إذا كان النوع leave
+        if kind == "leave":
+            end_date = data.get("end_date", req_date).strip()
+            request_data["end_date"] = end_date
         
         success = create_request(request_data)
         
