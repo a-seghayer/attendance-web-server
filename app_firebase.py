@@ -6,6 +6,8 @@ import zipfile
 from datetime import datetime
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
+from werkzeug.security import check_password_hash
+import jwt
 from firebase_config import (
     initialize_firebase,
     get_user_by_username,
