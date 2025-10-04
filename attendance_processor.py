@@ -10,6 +10,214 @@ from openpyxl.workbook import Workbook
 EMPLOYEE_MARKER = "Employee ID:"
 
 
+def get_employee_requests(employee_id: str, daily_data: List[Dict] = None, start_date: date = None, end_date: date = None) -> Dict[str, Any]:
+    """
+    جلب طلبات الموظف من Firebase وحساب الساعات الإضافية المطلوبة وأيام الإجازة
+    مع احتساب الساعات الإضافية الفعلية في الأيام المطلوبة
+    """
+    try:
+        # محاولة استيراد Firebase
+        try:
+            from firebase_config import get_db
+            db = get_db()
+        except ImportError:
+            print("⚠️ Firebase غير متاح، سيتم تجاهل الطلبات")
+            return {"overtime_hours": 0, "leave_days": 0}
+        
+        if not db:
+            print("⚠️ Firebase غير متصل، سيتم تجاهل الطلبات")
+            return {"overtime_hours": 0, "leave_days": 0}
+        
+        # جلب جميع الطلبات للموظف
+        requests_ref = db.collection('requests')
+        query = requests_ref.where('employee_id', '==', str(employee_id))
+        
+        docs = list(query.stream())
+        
+        overtime_hours = 0
+        leave_days = 0
+        overtime_dates = set()  # تواريخ الطلبات الإضافية
+        
+        for doc in docs:
+            data = doc.to_dict()
+            
+            # التحقق من أن الطلب نشط (غير ملغي)
+            if data.get('status') != 'active':
+                continue
+                
+            request_date_str = data.get('date')
+            if not request_date_str:
+                continue
+                
+            try:
+                # تحويل التاريخ من string إلى date
+                if isinstance(request_date_str, str):
+                    request_date = datetime.strptime(request_date_str, '%Y-%m-%d').date()
+                else:
+                    request_date = request_date_str
+                    
+                # فلترة التواريخ إذا تم تحديدها
+                if start_date and request_date < start_date:
+                    continue
+                if end_date and request_date > end_date:
+                    continue
+                    
+                request_type = data.get('kind', data.get('type', ''))
+                
+                if request_type == 'overtime':
+                    overtime_dates.add(request_date)
+                    
+                elif request_type == 'leave':
+                    # للإجازات: عد الأيام
+                    leave_days += 1
+                    
+            except (ValueError, TypeError) as e:
+                print(f"⚠️ خطأ في تحويل تاريخ الطلب: {request_date_str} - {e}")
+                continue
+        
+        # حساب الساعات الإضافية الفعلية في الأيام المطلوبة
+        # عندما يطلب الموظف إضافي في يوم معين، نجمع الساعات التي تزيد عن 7 ساعات في ذلك اليوم
+        if daily_data and overtime_dates:
+            for day_record in daily_data:
+                day_date = day_record.get("Date")
+                if day_date in overtime_dates:
+                    # حساب الساعات الإضافية في هذا اليوم (أكثر من 7 ساعات)
+                    day_hours = day_record.get("DayHours", 0)
+                    if day_hours > 7:
+                        overtime_hours += (day_hours - 7)
+                        print(f"   📅 {day_date}: {day_hours} ساعة، إضافي: {day_hours - 7} ساعة")
+                        
+        # إذا لم توجد بيانات يومية، استخدم افتراض ساعة واحدة لكل طلب
+        if not daily_data and overtime_dates:
+            overtime_hours = len(overtime_dates)  # ساعة واحدة لكل يوم إضافي مطلوب
+        
+        print(f"📊 موظف {employee_id}: {round(overtime_hours, 2)} ساعة إضافية مطلوبة، {leave_days} يوم إجازة مطلوب")
+        return {"overtime_hours": round(overtime_hours, 2), "leave_days": leave_days}
+        
+    except Exception as e:
+        print(f"❌ خطأ في جلب طلبات الموظف {employee_id}: {e}")
+        return {"overtime_hours": 0, "leave_days": 0}
+
+
+def analyze_file(path: str, sheet_name: Optional[str] = None) -> Dict[str, Any]:
+    """
+    تحليل ملف الحضور وإرجاع معلومات أساسية قبل المعالجة
+    """
+    try:
+        wb = load_workbook(path, data_only=True, read_only=True)
+        ws = wb[sheet_name] if sheet_name else wb.worksheets[0]
+        
+        rows = list(ws.iter_rows(values_only=False))
+        nrows = len(rows)
+        
+        # البحث عن الموظفين
+        employees_found = 0
+        file_format = "unknown"
+        first_date = None
+        last_date = None
+        all_dates = set()
+        
+        r = 0
+        while r < nrows:
+            row_cells = list(rows[r])
+            header = parse_employee_header(row_cells)
+            
+            if not header:
+                r += 1
+                continue
+                
+            employees_found += 1
+            
+            # تحديد نوع الملف من أول موظف
+            if employees_found == 1:
+                if r + 1 < nrows and detect_is_timecard_header(rows[r+1]):
+                    file_format = "timecard"
+                else:
+                    file_format = "legacy"
+            
+            # جمع التواريخ من بيانات الموظف
+            next_idx = r + 1
+            while next_idx < nrows:
+                next_row_cells = list(rows[next_idx])
+                next_header = parse_employee_header(next_row_cells)
+                if next_header:  # وصلنا للموظف التالي
+                    break
+                    
+                # محاولة استخراج التاريخ من الصف
+                for cell in next_row_cells[:3]:  # أول 3 أعمدة عادة تحتوي على التاريخ
+                    cell_value = cell_text(cell)
+                    if cell_value:
+                        # محاولة تحويل النص إلى تاريخ
+                        parsed_date = parse_date_flexible(cell_value)
+                        if parsed_date:
+                            all_dates.add(parsed_date)
+                            break
+                            
+                next_idx += 1
+            
+            r = next_idx
+        
+        # تحديد أول وآخر تاريخ
+        if all_dates:
+            first_date = min(all_dates)
+            last_date = max(all_dates)
+            period_days = (last_date - first_date).days + 1
+        else:
+            period_days = 0
+        
+        return {
+            "success": True,
+            "employees_count": employees_found,
+            "file_format": file_format,
+            "first_date": first_date.strftime('%Y-%m-%d') if first_date else None,
+            "last_date": last_date.strftime('%Y-%m-%d') if last_date else None,
+            "period_days": period_days,
+            "total_rows": nrows,
+            "sheet_name": ws.title,
+            "dates_found": len(all_dates)
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "employees_count": 0,
+            "file_format": "unknown",
+            "first_date": None,
+            "last_date": None,
+            "period_days": 0
+        }
+
+
+def parse_date_flexible(date_str: str) -> Optional[date]:
+    """
+    محاولة تحويل نص إلى تاريخ بصيغ مختلفة
+    """
+    if not date_str or not isinstance(date_str, str):
+        return None
+        
+    date_str = date_str.strip()
+    
+    # صيغ التاريخ المختلفة
+    date_formats = [
+        '%Y-%m-%d',
+        '%d/%m/%Y',
+        '%m/%d/%Y',
+        '%d-%m-%Y',
+        '%Y/%m/%d',
+        '%d.%m.%Y',
+        '%Y.%m.%d'
+    ]
+    
+    for fmt in date_formats:
+        try:
+            return datetime.strptime(date_str, fmt).date()
+        except ValueError:
+            continue
+    
+    return None
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="Process attendance Excel and compute per-employee metrics.")
     p.add_argument("input", help="Path to the input Excel file (as exported from attendance system)")
@@ -486,8 +694,14 @@ def process_workbook(path: str, sheet_name: Optional[str], target_days: int, hol
         delay_hours = partial.get("_delay_sum", max(0.0, 7.0 * work_days - total_hours))
         # Count days where exit was assumed (5 hours by default)
         assumed_exit_days = sum(1 for d in partial.get("_daily", []) if d.get("AssumedExit") == 1)
+        
+        # جلب طلبات الموظف من Firebase مع البيانات اليومية
+        employee_id = partial.get("EmployeeID")
+        daily_data = partial.get("_daily", [])
+        requests_data = get_employee_requests(employee_id, daily_data)
+        
         res_row = {
-            "EmployeeID": partial.get("EmployeeID"),
+            "EmployeeID": employee_id,
             "Name": partial.get("Name"),
             "Department": partial.get("Department"),
             "WorkDays": work_days,
@@ -500,6 +714,8 @@ def process_workbook(path: str, sheet_name: Optional[str], target_days: int, hol
             "DelayHours": round(delay_hours, 4),
             "WorkedOnHolidays": worked_on_holidays,
             "AssumedExitDays": assumed_exit_days,
+            "RequestedOvertimeHours": requests_data.get("overtime_hours", 0),
+            "RequestedLeaveDays": requests_data.get("leave_days", 0),
         }
         results.append(res_row)
         # Attach employee info to daily rows and collect
@@ -537,17 +753,19 @@ def write_summary(output_path: str, results: List[Dict[str, Any]], config: Dict[
     ws = wb.active
     ws.title = "Summary"
     headers = [
-        "EmployeeID",
-        "Name",
+        "Employee ID",
+        "Employee Name", 
         "Department",
-        "WorkDays",
-        "AbsentDays",
-        "ExtraDays",
-        "WorkedOnHolidays",
-        "TotalHours",
-        "OvertimeHours",
-        "DelayHours",
-        "AssumedExitDays",
+        "Work Days",
+        "Absent Days",
+        "Worked on Holidays",
+        "Extra Days",
+        "Total Hours",
+        "Overtime Hours",
+        "Delay Hours",
+        "Missing Punches",
+        "Requested Overtime Hours",
+        "Requested Leave Days",
     ]
     ws.append(headers)
     for row in results:
@@ -557,12 +775,14 @@ def write_summary(output_path: str, results: List[Dict[str, Any]], config: Dict[
             row.get("Department"),
             row.get("WorkDays"),
             row.get("AbsentDays"),
-            row.get("ExtraDays"),
             row.get("WorkedOnHolidays"),
+            row.get("ExtraDays"),
             row.get("TotalHours"),
             row.get("OvertimeHours"),
             row.get("DelayHours"),
-            row.get("AssumedExitDays"),
+            row.get("AssumedExitDays"),  # Missing Punches
+            row.get("RequestedOvertimeHours", 0),
+            row.get("RequestedLeaveDays", 0),
         ])
     # Add a config sheet
     ws2 = wb.create_sheet("Config")

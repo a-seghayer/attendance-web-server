@@ -873,6 +873,59 @@ def delete_request_endpoint():
 
 # === نقاط النهاية لمعالج الحضور (تبقى كما هي) ===
 
+@app.route("/api/attendance/analyze", methods=["POST"])
+@require_auth("attendance")
+def analyze_attendance_file():
+    """تحليل ملف الحضور قبل المعالجة"""
+    try:
+        print(f"🔍 استقبال طلب تحليل ملف من {request.remote_addr}")
+        
+        if "file" not in request.files:
+            return jsonify({"error": "لم يتم العثور على ملف في الطلب"}), 400
+        
+        file = request.files["file"]
+        if file.filename == "":
+            return jsonify({"error": "لم يتم اختيار ملف"}), 400
+        
+        if not file.filename.lower().endswith(('.xlsx', '.xls')):
+            return jsonify({"error": "نوع الملف غير مدعوم. يرجى رفع ملف Excel"}), 400
+        
+        # حفظ الملف مؤقتاً
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_file:
+            file.save(temp_file.name)
+            temp_path = temp_file.name
+        
+        try:
+            # تحليل الملف
+            sheet_name = request.form.get("sheet", None) or None
+            
+            from attendance_processor import analyze_file
+            analysis_result = analyze_file(temp_path, sheet_name)
+            
+            print(f"📊 نتيجة التحليل: {analysis_result}")
+            
+            # إضافة معلومات إضافية
+            analysis_result["file_name"] = file.filename
+            # حساب حجم الملف
+            file.seek(0, 2)  # الانتقال لنهاية الملف
+            file_size = file.tell()
+            file.seek(0)  # العودة للبداية
+            analysis_result["file_size"] = file_size
+            
+            return jsonify(analysis_result)
+            
+        finally:
+            # حذف الملف المؤقت
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
+                
+    except Exception as e:
+        print(f"❌ خطأ في تحليل الملف: {str(e)}")
+        return jsonify({"error": f"خطأ في تحليل الملف: {str(e)}"}), 500
+
+
 @app.route("/api/attendance/process", methods=["POST"])
 @require_auth("attendance")
 def process_attendance():
