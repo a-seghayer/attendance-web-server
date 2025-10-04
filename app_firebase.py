@@ -45,10 +45,11 @@ TRANSLATIONS = {
         'times_filename': 'جميع_الأوقات.xlsx',
         'zip_filename': 'تقارير_الحضور',
         'summary_headers': [
-            'رقم الموظف', 'اسم الموظف', 'القسم', 'أيام العمل المستهدفة', 'أيام الحضور',
-            'أيام الغياب', 'أيام الغياب (بدون عطل)', 'أيام إضافية', 'ساعات العمل',
-            'ساعات الإضافي', 'ساعات التأخير', 'عمل في العطل', 'أيام الخروج المفترض'
-        ],
+                'رقم الموظف', 'اسم الموظف', 'القسم', 'أيام العمل المستهدفة', 'أيام الحضور',
+                'أيام الغياب', 'أيام الغياب (بدون عطل)', 'أيام إضافية', 'ساعات العمل',
+                'ساعات الإضافي', 'ساعات التأخير', 'عمل في العطل', 'البصمات المنسية',
+                'ساعات إضافي مطلوبة', 'أيام إجازة مطلوبة'
+            ],
         'daily_headers': [
             'رقم الموظف', 'اسم الموظف', 'القسم', 'التاريخ', 'أول دخول', 'آخر خروج',
             'ساعات العمل', 'ساعات الإضافي', 'ساعات التأخير', 'عدد مرات الدخول/الخروج', 'يوم عطلة'
@@ -73,7 +74,8 @@ TRANSLATIONS = {
         'summary_headers': [
             'Employee ID', 'Employee Name', 'Department', 'Target Days', 'Work Days',
             'Absent Days', 'Absent Days (Excl. Holidays)', 'Extra Days', 'Total Hours',
-            'Overtime Hours', 'Delay Hours', 'Worked on Holidays', 'Assumed Exit Days'
+            'Overtime Hours', 'Delay Hours', 'Worked on Holidays', 'Missing Punches',
+            'Requested Overtime Hours', 'Requested Leave Days'
         ],
         'daily_headers': [
             'Employee ID', 'Employee Name', 'Department', 'Date', 'First In', 'Last Out',
@@ -93,6 +95,68 @@ TRANSLATIONS = {
 def get_translation(language, key):
     """الحصول على الترجمة المناسبة"""
     return TRANSLATIONS.get(language, TRANSLATIONS['ar']).get(key, key)
+
+def get_employee_overtime_requests(employee_id, start_date, end_date):
+    """جلب طلبات الإضافي المعتمدة للموظف في فترة معينة"""
+    try:
+        from firebase_config import db
+        if not db:
+            return 0.0
+        
+        # البحث عن طلبات الإضافي المعتمدة
+        requests_ref = db.collection('requests')
+        query = requests_ref.where('employeeId', '==', str(employee_id)) \
+                           .where('type', '==', 'overtime') \
+                           .where('status', '==', 'approved') \
+                           .where('date', '>=', start_date) \
+                           .where('date', '<=', end_date)
+        
+        total_hours = 0.0
+        for doc in query.stream():
+            data = doc.to_dict()
+            hours = float(data.get('hours', 0))
+            total_hours += hours
+        
+        return total_hours
+    except Exception as e:
+        print(f"خطأ في جلب طلبات الإضافي للموظف {employee_id}: {e}")
+        return 0.0
+
+def get_employee_leave_requests(employee_id, start_date, end_date):
+    """جلب طلبات الإجازة المعتمدة للموظف في فترة معينة"""
+    try:
+        from firebase_config import db
+        if not db:
+            return 0
+        
+        # البحث عن طلبات الإجازة المعتمدة
+        requests_ref = db.collection('requests')
+        query = requests_ref.where('employeeId', '==', str(employee_id)) \
+                           .where('type', '==', 'leave') \
+                           .where('status', '==', 'approved') \
+                           .where('startDate', '>=', start_date) \
+                           .where('endDate', '<=', end_date)
+        
+        total_days = 0
+        for doc in query.stream():
+            data = doc.to_dict()
+            # حساب عدد الأيام بين تاريخ البداية والنهاية
+            start = data.get('startDate')
+            end = data.get('endDate')
+            if start and end:
+                # تحويل التواريخ وحساب الفرق
+                from datetime import datetime
+                if isinstance(start, str):
+                    start = datetime.strptime(start, '%Y-%m-%d')
+                if isinstance(end, str):
+                    end = datetime.strptime(end, '%Y-%m-%d')
+                days = (end - start).days + 1
+                total_days += days
+        
+        return total_days
+    except Exception as e:
+        print(f"خطأ في جلب طلبات الإجازة للموظف {employee_id}: {e}")
+        return 0
 
 app = Flask(__name__)
 CORS(app)  # Allow static site to call the API
@@ -708,7 +772,25 @@ def process_attendance():
                 # إضافة بيانات الملخص
                 if summary_results:
                     for row, result in enumerate(summary_results, 2):
-                        summary_ws.cell(row=row, column=1, value=result.get('EmployeeID', ''))
+                        employee_id = result.get('EmployeeID', '')
+                        
+                        # حساب فترة التقرير من البيانات اليومية
+                        start_date = None
+                        end_date = None
+                        if daily_results:
+                            dates = [d.get('Date') for d in daily_results if d.get('EmployeeID') == employee_id]
+                            if dates:
+                                start_date = min(dates)
+                                end_date = max(dates)
+                        
+                        # جلب بيانات الطلبات
+                        requested_overtime = 0.0
+                        requested_leave = 0
+                        if start_date and end_date:
+                            requested_overtime = get_employee_overtime_requests(employee_id, start_date, end_date)
+                            requested_leave = get_employee_leave_requests(employee_id, start_date, end_date)
+                        
+                        summary_ws.cell(row=row, column=1, value=employee_id)
                         summary_ws.cell(row=row, column=2, value=result.get('Name', ''))
                         summary_ws.cell(row=row, column=3, value=result.get('Department', ''))
                         summary_ws.cell(row=row, column=4, value=target_days)
@@ -721,6 +803,8 @@ def process_attendance():
                         summary_ws.cell(row=row, column=11, value=round(result.get('DelayHours', 0), 2))
                         summary_ws.cell(row=row, column=12, value=result.get('WorkedOnHolidays', 0))
                         summary_ws.cell(row=row, column=13, value=result.get('AssumedExitDays', 0))
+                        summary_ws.cell(row=row, column=14, value=round(requested_overtime, 2))
+                        summary_ws.cell(row=row, column=15, value=requested_leave)
                 else:
                     # إضافة رسالة عدم وجود بيانات
                     summary_ws.cell(row=2, column=1, value=get_translation(language, 'no_data'))
