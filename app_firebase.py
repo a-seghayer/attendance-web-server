@@ -104,13 +104,17 @@ def get_employee_overtime_requests(employee_id, start_date, end_date):
         if not db:
             return 0.0
         
+        # تحويل التواريخ إلى strings للتوافق مع Firestore
+        start_date_str = start_date.strftime('%Y-%m-%d') if hasattr(start_date, 'strftime') else str(start_date)
+        end_date_str = end_date.strftime('%Y-%m-%d') if hasattr(end_date, 'strftime') else str(end_date)
+        
         # البحث عن طلبات الإضافي المعتمدة
         requests_ref = db.collection('requests')
         query = requests_ref.where('employeeId', '==', str(employee_id)) \
                            .where('type', '==', 'overtime') \
                            .where('status', '==', 'approved') \
-                           .where('date', '>=', start_date) \
-                           .where('date', '<=', end_date)
+                           .where('date', '>=', start_date_str) \
+                           .where('date', '<=', end_date_str)
         
         total_hours = 0.0
         for doc in query.stream():
@@ -130,13 +134,17 @@ def get_employee_leave_requests(employee_id, start_date, end_date):
         if not db:
             return 0
         
+        # تحويل التواريخ إلى strings للتوافق مع Firestore
+        start_date_str = start_date.strftime('%Y-%m-%d') if hasattr(start_date, 'strftime') else str(start_date)
+        end_date_str = end_date.strftime('%Y-%m-%d') if hasattr(end_date, 'strftime') else str(end_date)
+        
         # البحث عن طلبات الإجازة المعتمدة
         requests_ref = db.collection('requests')
         query = requests_ref.where('employeeId', '==', str(employee_id)) \
                            .where('type', '==', 'leave') \
                            .where('status', '==', 'approved') \
-                           .where('startDate', '>=', start_date) \
-                           .where('endDate', '<=', end_date)
+                           .where('date', '>=', start_date_str) \
+                           .where('date', '<=', end_date_str)
         
         total_days = 0
         for doc in query.stream():
