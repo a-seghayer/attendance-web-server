@@ -45,6 +45,10 @@ CORS(app)  # Allow static site to call the API
 app.config['JSON_AS_ASCII'] = False
 app.config['JSONIFY_PRETTYPRINT_REGULAR'] = True
 
+# Configure file upload limits
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max file size
+app.config['UPLOAD_TIMEOUT'] = 300  # 5 minutes timeout
+
 # Helper function for UTF-8 JSON responses
 def json_response(data, status_code=200):
     """Create JSON response with proper UTF-8 encoding for Arabic text"""
@@ -529,7 +533,11 @@ def cancel_request_endpoint():
 def process_attendance():
     """معالجة ملف الحضور"""
     try:
+        print(f"🔄 استقبال طلب معالجة الحضور من {request.remote_addr}")
+        print(f"📋 معلومات الطلب: Content-Length: {request.content_length}")
+        
         if "file" not in request.files:
+            print("❌ لم يتم العثور على ملف في الطلب")
             return jsonify({"error": "لم يتم رفع أي ملف"}), 400
         
         file = request.files["file"]
@@ -737,8 +745,18 @@ def process_attendance():
                 pass
                 
     except Exception as e:
-        print(f"خطأ في معالجة الحضور: {str(e)}")
-        return jsonify({"error": f"خطأ في معالجة الملف: {str(e)}"}), 500
+        error_msg = str(e)
+        print(f"❌ خطأ في معالجة الحضور: {error_msg}")
+        
+        # معالجة أخطاء محددة
+        if "413" in error_msg or "Request Entity Too Large" in error_msg:
+            return jsonify({"error": "الملف كبير جداً. الحد الأقصى 50 ميجابايت."}), 413
+        elif "timeout" in error_msg.lower():
+            return jsonify({"error": "انتهت مهلة المعالجة. جرب ملف أصغر."}), 408
+        elif "connection" in error_msg.lower():
+            return jsonify({"error": "مشكلة في الاتصال. تأكد من استقرار الإنترنت."}), 503
+        else:
+            return jsonify({"error": f"خطأ في معالجة الملف: {error_msg}"}), 500
 
 # === نقاط النهاية العامة ===
 
