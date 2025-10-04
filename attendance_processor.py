@@ -28,11 +28,21 @@ def get_employee_requests(employee_id: str, daily_data: List[Dict] = None, start
             print("⚠️ Firebase غير متصل، سيتم تجاهل الطلبات")
             return {"overtime_hours": 0, "leave_days": 0}
         
-        # جلب جميع الطلبات للموظف
+        # جلب جميع الطلبات للموظف - استخدام الحقول الصحيحة
         requests_ref = db.collection('requests')
-        query = requests_ref.where('employee_id', '==', str(employee_id))
+        # محاولة البحث بكلا الحقلين للتوافق
+        query1 = requests_ref.where('employee_id', '==', str(employee_id))
+        query2 = requests_ref.where('employeeId', '==', str(employee_id))
         
-        docs = list(query.stream())
+        docs = []
+        try:
+            docs.extend(list(query1.stream()))
+        except:
+            pass
+        try:
+            docs.extend(list(query2.stream()))
+        except:
+            pass
         
         overtime_hours = 0
         leave_days = 0
@@ -53,23 +63,29 @@ def get_employee_requests(employee_id: str, daily_data: List[Dict] = None, start
                 # تحويل التاريخ من string إلى date
                 if isinstance(request_date_str, str):
                     request_date = datetime.strptime(request_date_str, '%Y-%m-%d').date()
+                elif hasattr(request_date_str, 'date'):
+                    request_date = request_date_str.date()
                 else:
                     request_date = request_date_str
                     
-                # فلترة التواريخ إذا تم تحديدها
+                # فلترة التواريخ إذا تم تحديدها - يجب أن يكون الطلب في نفس فترة المعالجة
                 if start_date and request_date < start_date:
+                    print(f"   ⏪ طلب خارج الفترة (قبل): {request_date} < {start_date}")
                     continue
                 if end_date and request_date > end_date:
+                    print(f"   ⏩ طلب خارج الفترة (بعد): {request_date} > {end_date}")
                     continue
                     
                 request_type = data.get('kind', data.get('type', ''))
                 
                 if request_type == 'overtime':
                     overtime_dates.add(request_date)
+                    print(f"   📋 طلب إضافي في {request_date}")
                     
                 elif request_type == 'leave':
                     # للإجازات: عد الأيام
                     leave_days += 1
+                    print(f"   🏖️ طلب إجازة في {request_date}")
                     
             except (ValueError, TypeError) as e:
                 print(f"⚠️ خطأ في تحويل تاريخ الطلب: {request_date_str} - {e}")
@@ -78,20 +94,43 @@ def get_employee_requests(employee_id: str, daily_data: List[Dict] = None, start
         # حساب الساعات الإضافية الفعلية في الأيام المطلوبة
         # عندما يطلب الموظف إضافي في يوم معين، نجمع الساعات التي تزيد عن 7 ساعات في ذلك اليوم
         if daily_data and overtime_dates:
+            print(f"   🔍 فحص {len(daily_data)} يوم عمل للموظف {employee_id}")
+            print(f"   📋 طلبات إضافية في التواريخ: {sorted(overtime_dates)}")
+            
             for day_record in daily_data:
                 day_date = day_record.get("Date")
+                
+                # التأكد من أن التاريخ في الشكل الصحيح
+                if isinstance(day_date, str):
+                    try:
+                        day_date = datetime.strptime(day_date, '%Y-%m-%d').date()
+                    except ValueError:
+                        continue
+                elif hasattr(day_date, 'date'):
+                    day_date = day_date.date()
+                
                 if day_date in overtime_dates:
                     # حساب الساعات الإضافية في هذا اليوم (أكثر من 7 ساعات)
                     day_hours = day_record.get("DayHours", 0)
                     if day_hours > 7:
-                        overtime_hours += (day_hours - 7)
-                        print(f"   📅 {day_date}: {day_hours} ساعة، إضافي: {day_hours - 7} ساعة")
+                        daily_overtime = day_hours - 7
+                        overtime_hours += daily_overtime
+                        print(f"   ✅ {day_date}: {day_hours} ساعة، إضافي: {daily_overtime} ساعة")
+                    else:
+                        print(f"   ⚠️ {day_date}: {day_hours} ساعة، لا يوجد إضافي (أقل من 7 ساعات)")
+                elif day_date and start_date and end_date and start_date <= day_date <= end_date:
+                    # يوم في الفترة لكن لا يوجد طلب إضافي
+                    pass
                         
         # إذا لم توجد بيانات يومية، استخدم افتراض ساعة واحدة لكل طلب
         if not daily_data and overtime_dates:
             overtime_hours = len(overtime_dates)  # ساعة واحدة لكل يوم إضافي مطلوب
         
-        print(f"📊 موظف {employee_id}: {round(overtime_hours, 2)} ساعة إضافية مطلوبة، {leave_days} يوم إجازة مطلوب")
+        print(f"📊 ملخص الموظف {employee_id}:")
+        print(f"   🕒 إجمالي الساعات الإضافية المطلوبة: {round(overtime_hours, 2)} ساعة")
+        print(f"   🏖️ إجمالي أيام الإجازة المطلوبة: {leave_days} يوم")
+        print(f"   📋 عدد طلبات الإضافي في الفترة: {len(overtime_dates)}")
+        
         return {"overtime_hours": round(overtime_hours, 2), "leave_days": leave_days}
         
     except Exception as e:
@@ -702,7 +741,34 @@ def process_workbook(path: str, sheet_name: Optional[str], target_days: int, hol
         # جلب طلبات الموظف من Firebase مع البيانات اليومية
         employee_id = partial.get("EmployeeID")
         daily_data = partial.get("_daily", [])
-        requests_data = get_employee_requests(employee_id, daily_data)
+        
+        # تحديد فترة المعالجة من البيانات اليومية
+        period_start = None
+        period_end = None
+        if daily_data:
+            dates = []
+            for d in daily_data:
+                day_date = d.get("Date")
+                if day_date:
+                    # تحويل التاريخ للشكل الصحيح
+                    if isinstance(day_date, str):
+                        try:
+                            day_date = datetime.strptime(day_date, '%Y-%m-%d').date()
+                        except ValueError:
+                            continue
+                    elif hasattr(day_date, 'date'):
+                        day_date = day_date.date()
+                    dates.append(day_date)
+            
+            if dates:
+                period_start = min(dates)
+                period_end = max(dates)
+        
+        # طباعة معلومات الفترة للتشخيص
+        if period_start and period_end:
+            print(f"📅 فترة المعالجة للموظف {employee_id}: من {period_start} إلى {period_end}")
+        
+        requests_data = get_employee_requests(employee_id, daily_data, period_start, period_end)
         
         res_row = {
             "EmployeeID": employee_id,
@@ -743,6 +809,12 @@ def process_workbook(path: str, sheet_name: Optional[str], target_days: int, hol
     print(f"   - Employees found: {employees_found}")
     print(f"   - Summary results: {len(results)}")
     print(f"   - Daily records: {len(daily_rows)}")
+    
+    # ملخص الطلبات المعالجة
+    total_overtime_requests = sum(r.get("RequestedOvertimeHours", 0) for r in results)
+    total_leave_requests = sum(r.get("RequestedLeaveDays", 0) for r in results)
+    print(f"   - إجمالي الساعات الإضافية المطلوبة: {total_overtime_requests}")
+    print(f"   - إجمالي أيام الإجازة المطلوبة: {total_leave_requests}")
     
     if results:
         print(f"   - First result: {results[0]}")
