@@ -103,12 +103,15 @@ def analyze_file(path: str, sheet_name: Optional[str] = None) -> Dict[str, Any]:
     """
     تحليل ملف الحضور وإرجاع معلومات أساسية قبل المعالجة
     """
+    print(f"🔍 بدء تحليل الملف: {path}")
     try:
         wb = load_workbook(path, data_only=True, read_only=True)
         ws = wb[sheet_name] if sheet_name else wb.worksheets[0]
+        print(f"📊 تم فتح الملف: ورقة '{ws.title}', الصفوف: {ws.max_row}, الأعمدة: {ws.max_column}")
         
         rows = list(ws.iter_rows(values_only=False))
         nrows = len(rows)
+        print(f"📋 عدد الصفوف المقروءة: {nrows}")
         
         # البحث عن الموظفين
         employees_found = 0
@@ -165,7 +168,7 @@ def analyze_file(path: str, sheet_name: Optional[str] = None) -> Dict[str, Any]:
         else:
             period_days = 0
         
-        return {
+        result = {
             "success": True,
             "employees_count": employees_found,
             "file_format": file_format,
@@ -177,7 +180,13 @@ def analyze_file(path: str, sheet_name: Optional[str] = None) -> Dict[str, Any]:
             "dates_found": len(all_dates)
         }
         
+        print(f"✅ تم تحليل الملف بنجاح: {result}")
+        return result
+        
     except Exception as e:
+        print(f"❌ خطأ في تحليل الملف: {str(e)}")
+        import traceback
+        print(f"📋 تفاصيل الخطأ: {traceback.format_exc()}")
         return {
             "success": False,
             "error": str(e),

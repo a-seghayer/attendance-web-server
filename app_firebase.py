@@ -879,6 +879,7 @@ def analyze_attendance_file():
     """تحليل ملف الحضور قبل المعالجة"""
     try:
         print(f"🔍 استقبال طلب تحليل ملف من {request.remote_addr}")
+        print(f"📋 معلومات الطلب: Content-Type: {request.content_type}, Content-Length: {request.content_length}")
         
         if "file" not in request.files:
             return jsonify({"error": "لم يتم العثور على ملف في الطلب"}), 400
