@@ -108,19 +108,25 @@ def get_employee_overtime_requests(employee_id, start_date, end_date):
         start_date_str = start_date.strftime('%Y-%m-%d') if hasattr(start_date, 'strftime') else str(start_date)
         end_date_str = end_date.strftime('%Y-%m-%d') if hasattr(end_date, 'strftime') else str(end_date)
         
-        # البحث عن طلبات الإضافي المعتمدة
+        # البحث عن طلبات الإضافي - استعلام مبسط لتجنب مشكلة الفهارس
         requests_ref = db.collection('requests')
         query = requests_ref.where('employeeId', '==', str(employee_id)) \
-                           .where('type', '==', 'overtime') \
-                           .where('status', '==', 'approved') \
-                           .where('date', '>=', start_date_str) \
-                           .where('date', '<=', end_date_str)
+                           .where('type', '==', 'overtime')
         
         total_hours = 0.0
         for doc in query.stream():
             data = doc.to_dict()
-            hours = float(data.get('hours', 0))
-            total_hours += hours
+            
+            # فلترة التواريخ في الكود
+            request_date = data.get('date')
+            if request_date:
+                # التحقق من أن التاريخ في الفترة المطلوبة
+                if isinstance(request_date, str):
+                    if start_date_str <= request_date <= end_date_str:
+                        # التحقق من الحالة
+                        if data.get('status') == 'approved':
+                            hours = float(data.get('hours', 0))
+                            total_hours += hours
         
         return total_hours
     except Exception as e:
@@ -138,29 +144,26 @@ def get_employee_leave_requests(employee_id, start_date, end_date):
         start_date_str = start_date.strftime('%Y-%m-%d') if hasattr(start_date, 'strftime') else str(start_date)
         end_date_str = end_date.strftime('%Y-%m-%d') if hasattr(end_date, 'strftime') else str(end_date)
         
-        # البحث عن طلبات الإجازة المعتمدة
+        # البحث عن طلبات الإجازة - استعلام مبسط لتجنب مشكلة الفهارس
         requests_ref = db.collection('requests')
         query = requests_ref.where('employeeId', '==', str(employee_id)) \
-                           .where('type', '==', 'leave') \
-                           .where('status', '==', 'approved') \
-                           .where('date', '>=', start_date_str) \
-                           .where('date', '<=', end_date_str)
+                           .where('type', '==', 'leave')
         
         total_days = 0
         for doc in query.stream():
             data = doc.to_dict()
-            # حساب عدد الأيام بين تاريخ البداية والنهاية
-            start = data.get('startDate')
-            end = data.get('endDate')
-            if start and end:
-                # تحويل التواريخ وحساب الفرق
-                from datetime import datetime
-                if isinstance(start, str):
-                    start = datetime.strptime(start, '%Y-%m-%d')
-                if isinstance(end, str):
-                    end = datetime.strptime(end, '%Y-%m-%d')
-                days = (end - start).days + 1
-                total_days += days
+            
+            # فلترة التواريخ في الكود
+            request_date = data.get('date')
+            if request_date:
+                # التحقق من أن التاريخ في الفترة المطلوبة
+                if isinstance(request_date, str):
+                    if start_date_str <= request_date <= end_date_str:
+                        # التحقق من الحالة
+                        if data.get('status') == 'approved':
+                            # حساب عدد الأيام
+                            days = int(data.get('days', 1))  # افتراضي يوم واحد
+                            total_days += days
         
         return total_days
     except Exception as e:

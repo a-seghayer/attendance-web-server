@@ -15,10 +15,6 @@ def get_employee_requests(employee_id: str, daily_data: List[Dict] = None, start
     جلب طلبات الموظف من Firebase وحساب الساعات الإضافية المطلوبة وأيام الإجازة
     مع احتساب الساعات الإضافية الفعلية في الأيام المطلوبة
     """
-    # تسريع العملية - تعطيل Firebase مؤقتاً للاختبار
-    # TODO: إعادة تفعيل Firebase عند الحاجة
-    return {"overtime_hours": 0, "leave_days": 0}
-    
     try:
         # محاولة استيراد Firebase
         try:
@@ -30,21 +26,17 @@ def get_employee_requests(employee_id: str, daily_data: List[Dict] = None, start
         if not db:
             return {"overtime_hours": 0, "leave_days": 0}
         
-        # جلب جميع الطلبات للموظف - استخدام الحقول الصحيحة
+        # جلب جميع الطلبات للموظف - استعلام مبسط
         requests_ref = db.collection('requests')
-        # محاولة البحث بكلا الحقلين للتوافق
-        query1 = requests_ref.where('employee_id', '==', str(employee_id))
-        query2 = requests_ref.where('employeeId', '==', str(employee_id))
+        # استخدام حقل واحد فقط لتجنب مشكلة الفهارس
+        query = requests_ref.where('employeeId', '==', str(employee_id))
         
         docs = []
         try:
-            docs.extend(list(query1.stream()))
-        except:
-            pass
-        try:
-            docs.extend(list(query2.stream()))
-        except:
-            pass
+            docs.extend(list(query.stream()))
+        except Exception as e:
+            print(f"⚠️ خطأ في جلب الطلبات: {e}")
+            return {"overtime_hours": 0, "leave_days": 0}
         
         overtime_hours = 0
         leave_days = 0
@@ -53,8 +45,8 @@ def get_employee_requests(employee_id: str, daily_data: List[Dict] = None, start
         for doc in docs:
             data = doc.to_dict()
             
-            # التحقق من أن الطلب نشط (غير ملغي)
-            if data.get('status') != 'active':
+            # التحقق من أن الطلب معتمد
+            if data.get('status') != 'approved':
                 continue
                 
             request_date_str = data.get('date')
