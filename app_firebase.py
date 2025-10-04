@@ -630,34 +630,11 @@ def process_attendance():
             
             # التحقق من وجود نتائج
             if not summary_results and not daily_results:
-                print("⚠️ لم يتم العثور على نتائج - إنشاء ملف تجريبي للتشخيص")
-                
-                # إنشاء بيانات تجريبية للتشخيص
-                summary_results = [{
-                    'employee_id': 'TEST_001',
-                    'target_days': target_days,
-                    'attendance_days': 0,
-                    'absent_days': target_days,
-                    'total_hours': 0,
-                    'overtime_hours': 0,
-                    'late_minutes': 0,
-                    'status': 'لم يتم العثور على بيانات في الملف'
-                }]
-                
-                daily_results = [{
-                    'employee_id': 'TEST_001',
-                    'date': '2024-01-01',
-                    'first_in': '',
-                    'last_out': '',
-                    'work_hours': 0,
-                    'overtime_hours': 0,
-                    'late_minutes': 0,
-                    'notes': 'لم يتم العثور على بيانات حضور في الملف المرفوع'
-                }]
-                
-                print("📝 تم إنشاء بيانات تجريبية للتشخيص")
+                print("⚠️ لم يتم العثور على نتائج - المعالجة فشلت")
+                return jsonify({"error": "لم يتم العثور على بيانات صالحة في الملف"}), 400
             
             # إنشاء ملف ZIP يحتوي على التقارير
+            print(f"📦 إنشاء ملف ZIP مع {len(summary_results)} موظف و {len(daily_results)} سجل يومي")
             zip_buffer = io.BytesIO()
             
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
@@ -667,22 +644,23 @@ def process_attendance():
                 summary_ws.title = "ملخص الحضور"
                 
                 # إضافة عناوين الملخص
-                summary_headers = ["الموظف", "أيام العمل المستهدفة", "أيام الحضور", "أيام الغياب", 
-                                 "ساعات العمل", "ساعات الإضافي", "التأخير (دقائق)", "الحالة"]
+                summary_headers = ["رقم الموظف", "اسم الموظف", "القسم", "أيام العمل المستهدفة", "أيام الحضور", 
+                                 "أيام الغياب", "ساعات العمل", "ساعات الإضافي", "ساعات التأخير"]
                 for col, header in enumerate(summary_headers, 1):
                     summary_ws.cell(row=1, column=col, value=header)
                 
                 # إضافة بيانات الملخص
                 if summary_results:
                     for row, result in enumerate(summary_results, 2):
-                        summary_ws.cell(row=row, column=1, value=result.get('employee_id', ''))
-                        summary_ws.cell(row=row, column=2, value=result.get('target_days', 0))
-                        summary_ws.cell(row=row, column=3, value=result.get('attendance_days', 0))
-                        summary_ws.cell(row=row, column=4, value=result.get('absent_days', 0))
-                        summary_ws.cell(row=row, column=5, value=result.get('total_hours', 0))
-                        summary_ws.cell(row=row, column=6, value=result.get('overtime_hours', 0))
-                        summary_ws.cell(row=row, column=7, value=result.get('late_minutes', 0))
-                        summary_ws.cell(row=row, column=8, value=result.get('status', ''))
+                        summary_ws.cell(row=row, column=1, value=result.get('EmployeeID', ''))
+                        summary_ws.cell(row=row, column=2, value=result.get('Name', ''))
+                        summary_ws.cell(row=row, column=3, value=result.get('Department', ''))
+                        summary_ws.cell(row=row, column=4, value=target_days)
+                        summary_ws.cell(row=row, column=5, value=result.get('WorkDays', 0))
+                        summary_ws.cell(row=row, column=6, value=result.get('AbsentDays', 0))
+                        summary_ws.cell(row=row, column=7, value=round(result.get('TotalHours', 0), 2))
+                        summary_ws.cell(row=row, column=8, value=round(result.get('OvertimeHours', 0), 2))
+                        summary_ws.cell(row=row, column=9, value=round(result.get('DelayHours', 0), 2))
                 else:
                     # إضافة رسالة عدم وجود بيانات
                     summary_ws.cell(row=2, column=1, value="لا توجد بيانات")
@@ -693,6 +671,7 @@ def process_attendance():
                 summary_wb.save(summary_buffer)
                 summary_buffer.seek(0)
                 zip_file.writestr("Summary_Report.xlsx", summary_buffer.getvalue())
+                print(f"✅ تم إنشاء ملف الملخص مع {len(summary_results)} موظف")
                 
                 # إنشاء ملف التفاصيل اليومية
                 daily_wb = Workbook()
@@ -700,22 +679,34 @@ def process_attendance():
                 daily_ws.title = "التفاصيل اليومية"
                 
                 # إضافة عناوين التفاصيل اليومية
-                daily_headers = ["الموظف", "التاريخ", "أول دخول", "آخر خروج", "ساعات العمل", 
-                               "ساعات الإضافي", "التأخير (دقائق)", "ملاحظات"]
+                daily_headers = ["رقم الموظف", "اسم الموظف", "التاريخ", "أول دخول", "آخر خروج", 
+                               "ساعات العمل", "ساعات الإضافي", "ساعات التأخير", "عدد مرات الدخول/الخروج"]
                 for col, header in enumerate(daily_headers, 1):
                     daily_ws.cell(row=1, column=col, value=header)
                 
                 # إضافة بيانات التفاصيل اليومية
                 if daily_results:
                     for row, daily in enumerate(daily_results, 2):
-                        daily_ws.cell(row=row, column=1, value=daily.get('employee_id', ''))
-                        daily_ws.cell(row=row, column=2, value=daily.get('date', ''))
-                        daily_ws.cell(row=row, column=3, value=daily.get('first_in', ''))
-                        daily_ws.cell(row=row, column=4, value=daily.get('last_out', ''))
-                        daily_ws.cell(row=row, column=5, value=daily.get('work_hours', 0))
-                        daily_ws.cell(row=row, column=6, value=daily.get('overtime_hours', 0))
-                        daily_ws.cell(row=row, column=7, value=daily.get('late_minutes', 0))
-                        daily_ws.cell(row=row, column=8, value=daily.get('notes', ''))
+                        # استخراج أول وآخر وقت من TimesList
+                        times_list = daily.get('TimesList', '')
+                        first_in = ''
+                        last_out = ''
+                        if times_list:
+                            times = times_list.split(',')
+                            if len(times) >= 1:
+                                first_in = times[0]
+                            if len(times) >= 2:
+                                last_out = times[-1]
+                        
+                        daily_ws.cell(row=row, column=1, value=daily.get('EmployeeID', ''))
+                        daily_ws.cell(row=row, column=2, value=daily.get('Name', ''))
+                        daily_ws.cell(row=row, column=3, value=str(daily.get('Date', '')))
+                        daily_ws.cell(row=row, column=4, value=first_in)
+                        daily_ws.cell(row=row, column=5, value=last_out)
+                        daily_ws.cell(row=row, column=6, value=round(daily.get('DayHours', 0), 2))
+                        daily_ws.cell(row=row, column=7, value=round(daily.get('DayOvertimeHours', 0), 2))
+                        daily_ws.cell(row=row, column=8, value=round(daily.get('DayDelayHours', 0), 2))
+                        daily_ws.cell(row=row, column=9, value=daily.get('TimesCount', 0))
                 else:
                     # إضافة رسالة عدم وجود بيانات
                     daily_ws.cell(row=2, column=1, value="لا توجد بيانات يومية")
@@ -726,6 +717,33 @@ def process_attendance():
                 daily_wb.save(daily_buffer)
                 daily_buffer.seek(0)
                 zip_file.writestr("Daily_Details.xlsx", daily_buffer.getvalue())
+                print(f"✅ تم إنشاء ملف التفاصيل اليومية مع {len(daily_results)} سجل")
+                
+                # إنشاء ملف تفصيلي لجميع أوقات الدخول والخروج
+                times_wb = Workbook()
+                times_ws = times_wb.active
+                times_ws.title = "جميع الأوقات"
+                
+                # إضافة عناوين ملف الأوقات
+                times_headers = ["رقم الموظف", "اسم الموظف", "التاريخ", "جميع أوقات الدخول والخروج", "عدد المرات"]
+                for col, header in enumerate(times_headers, 1):
+                    times_ws.cell(row=1, column=col, value=header)
+                
+                # إضافة بيانات الأوقات
+                if daily_results:
+                    for row, daily in enumerate(daily_results, 2):
+                        times_ws.cell(row=row, column=1, value=daily.get('EmployeeID', ''))
+                        times_ws.cell(row=row, column=2, value=daily.get('Name', ''))
+                        times_ws.cell(row=row, column=3, value=str(daily.get('Date', '')))
+                        times_ws.cell(row=row, column=4, value=daily.get('TimesList', ''))
+                        times_ws.cell(row=row, column=5, value=daily.get('TimesCount', 0))
+                
+                # حفظ ملف الأوقات في الذاكرة
+                times_buffer = io.BytesIO()
+                times_wb.save(times_buffer)
+                times_buffer.seek(0)
+                zip_file.writestr("All_Times.xlsx", times_buffer.getvalue())
+                print(f"✅ تم إنشاء ملف جميع الأوقات مع {len(daily_results)} سجل")
             
             zip_buffer.seek(0)
             
