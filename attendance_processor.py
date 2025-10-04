@@ -74,7 +74,14 @@ def parse_employee_header(row_cells: List[Cell]) -> Optional[Dict[str, str]]:
     # 1) All-in-one A cell: 'Employee ID: X, First Name: Y, Department: Z'
     # 2) Split across A/B/C cells respectively
     a = cell_text(row_cells[0]) if len(row_cells) > 0 else ""
-    if not a.startswith(EMPLOYEE_MARKER):
+    
+    # البحث عن Employee ID بطرق مختلفة
+    a_lower = a.lower()
+    if not (a.startswith(EMPLOYEE_MARKER) or 
+            "employee id:" in a_lower or 
+            "employee id :" in a_lower or
+            "employeeid:" in a_lower or
+            a_lower.startswith("employee")):
         return None
     header = {"EmployeeID": "", "Name": None, "Department": None}
     # First, try to parse from A if it contains comma-separated key:value pairs
@@ -182,6 +189,7 @@ def process_timecard_section(rows: List[List[Cell]], start_idx: int, holidays: s
     Returns (next_index, result_dict).
     """
     header = parse_employee_header(rows[start_idx])
+    print(f"🔄 معالجة قسم timecard للموظف: {header}")
     i = start_idx + 1
     n = len(rows)
     # Expect header line Date | Times | Time
@@ -330,6 +338,7 @@ def process_timecard_section(rows: List[List[Cell]], start_idx: int, holidays: s
 
 def process_legacy_section(rows: List[List[Cell]], start_idx: int, holidays: set, assume_missing_exit_hours: float) -> (int, Dict[str, Any]):
     header = parse_employee_header(rows[start_idx])
+    print(f"🔄 معالجة قسم legacy للموظف: {header}")
     i = start_idx + 1
     n = len(rows)
     work_days = 0
@@ -418,21 +427,38 @@ def process_legacy_section(rows: List[List[Cell]], start_idx: int, holidays: set
 
 
 def process_workbook(path: str, sheet_name: Optional[str], target_days: int, holidays: set, special_days: set = None, fmt: str = "auto", cutoff_hour: int = 7, dup_threshold_minutes: int = 60, assume_missing_exit_hours: float = 5.0) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    print(f"🔄 بدء معالجة الملف: {path}")
+    print(f"📋 معاملات المعالجة: target_days={target_days}, fmt={fmt}, cutoff_hour={cutoff_hour}")
+    
     wb = load_workbook(path, data_only=True, read_only=True)
     ws = wb[sheet_name] if sheet_name else wb.worksheets[0]
+    
+    print(f"📊 معلومات الورقة: {ws.title}, صفوف: {ws.max_row}, أعمدة: {ws.max_column}")
 
     rows = list(ws.iter_rows(values_only=False))
     r = 0
     nrows = len(rows)
     results: List[Dict[str, Any]] = []
     daily_rows: List[Dict[str, Any]] = []
+    
+    print(f"🔍 البحث عن موظفين في {nrows} صف...")
+    employees_found = 0
 
     while r < nrows:
         row_cells = list(rows[r])
         header = parse_employee_header(row_cells)
         if not header:
+            # طباعة محتوى الصف للتشخيص
+            if r < 20:  # فقط أول 20 صف لتجنب الإزعاج
+                cell_content = cell_text(row_cells[0]) if len(row_cells) > 0 else ""
+                if cell_content:
+                    print(f"  الصف {r+1}: '{cell_content}' - لا يحتوي على Employee ID")
             r += 1
             continue
+            
+        employees_found += 1
+        print(f"✅ وُجد موظف #{employees_found} في الصف {r+1}: {header}")
+        
         # Decide which section parser to use
         next_idx = r
         if fmt == "timecard" or (fmt == "auto" and r + 1 < nrows and detect_is_timecard_header(rows[r+1])):
@@ -490,6 +516,17 @@ def process_workbook(path: str, sheet_name: Optional[str], target_days: int, hol
             }
             daily_rows.append(row)
         r = next_idx
+    
+    print(f"📊 انتهت المعالجة:")
+    print(f"   - عدد الموظفين المعثور عليهم: {employees_found}")
+    print(f"   - عدد نتائج الملخص: {len(results)}")
+    print(f"   - عدد السجلات اليومية: {len(daily_rows)}")
+    
+    if results:
+        print(f"   - أول نتيجة: {results[0]}")
+    if daily_rows:
+        print(f"   - أول سجل يومي: {daily_rows[0]}")
+    
     return results, daily_rows
 
 
