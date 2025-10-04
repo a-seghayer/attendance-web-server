@@ -1083,12 +1083,9 @@ def process_attendance():
                                 start_date = min(dates)
                                 end_date = max(dates)
                         
-                        # جلب بيانات الطلبات
+                        # تعطيل Firebase مؤقتاً لحل مشكلة الأداء
                         requested_overtime = 0.0
                         requested_leave = 0
-                        if start_date and end_date:
-                            requested_overtime = get_employee_overtime_requests(employee_id, start_date, end_date)
-                            requested_leave = get_employee_leave_requests(employee_id, start_date, end_date)
                         
                         summary_ws.cell(row=row, column=1, value=employee_id)
                         summary_ws.cell(row=row, column=2, value=result.get('Name', ''))

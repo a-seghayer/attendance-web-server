@@ -15,6 +15,9 @@ def get_employee_requests(employee_id: str, daily_data: List[Dict] = None, start
     جلب طلبات الموظف من Firebase وحساب الساعات الإضافية المطلوبة وأيام الإجازة
     مع احتساب الساعات الإضافية الفعلية في الأيام المطلوبة
     """
+    # تعطيل Firebase نهائياً لحل مشكلة الأداء والـ timeout
+    return {"overtime_hours": 0, "leave_days": 0}
+    
     try:
         # محاولة استيراد Firebase
         try:
