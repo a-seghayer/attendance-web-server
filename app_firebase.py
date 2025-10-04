@@ -612,6 +612,40 @@ def firebase_status():
             "message": f"خطأ في Firebase: {str(e)}"
         }), 500
 
+@app.route("/api/requests/reset", methods=["POST"])
+@require_auth("overtime")
+def reset_all_requests():
+    """إعادة تعيين جميع الطلبات لحالة نشط (للاختبار)"""
+    try:
+        from firebase_config import get_db
+        db = get_db()
+        
+        if not db:
+            return jsonify({"error": "Firebase غير متصل"}), 500
+        
+        # جلب جميع الطلبات
+        requests_ref = db.collection('requests')
+        all_docs = list(requests_ref.stream())
+        
+        updated_count = 0
+        for doc in all_docs:
+            doc_ref = doc.reference
+            doc_ref.update({
+                'status': 'active',
+                'canceledBy': None,
+                'canceledAt': None
+            })
+            updated_count += 1
+        
+        return jsonify({
+            "message": f"تم إعادة تعيين {updated_count} طلب لحالة نشط",
+            "count": updated_count
+        })
+        
+    except Exception as e:
+        print(f"خطأ في إعادة التعيين: {str(e)}")
+        return jsonify({"error": "خطأ في الخادم"}), 500
+
 @app.route("/api/requests/test", methods=["POST"])
 @require_auth("overtime")
 def create_test_request():
@@ -730,6 +764,111 @@ def cancel_request_endpoint():
             
     except Exception as e:
         print(f"خطأ في إلغاء الطلب: {str(e)}")
+        return jsonify({"error": "خطأ في الخادم"}), 500
+
+@app.route("/api/requests/enable", methods=["POST"])
+@require_auth("overtime")
+def enable_request_endpoint():
+    """تفعيل طلب"""
+    try:
+        data = request.get_json()
+        request_id = data.get("id")
+        
+        if not request_id:
+            return jsonify({"error": "معرف الطلب مطلوب"}), 400
+        
+        from firebase_config import get_db
+        db = get_db()
+        
+        if not db:
+            return jsonify({"error": "Firebase غير متصل"}), 500
+        
+        # محاولة البحث بـ document ID أولاً
+        try:
+            doc_ref = db.collection('requests').document(request_id)
+            doc = doc_ref.get()
+            
+            if doc.exists:
+                doc_ref.update({
+                    'status': 'active',
+                    'canceledBy': None,
+                    'canceledAt': None
+                })
+                print(f"✅ تم تفعيل الطلب: {request_id}")
+                return jsonify({"message": "تم تفعيل الطلب بنجاح"})
+        except:
+            pass
+            
+        # البحث عن الطلب بـ integer ID
+        requests_ref = db.collection('requests')
+        try:
+            query = requests_ref.where('id', '==', int(request_id))
+            docs = list(query.stream())
+            
+            if docs:
+                doc_ref = docs[0].reference
+                doc_ref.update({
+                    'status': 'active',
+                    'canceledBy': None,
+                    'canceledAt': None
+                })
+                print(f"✅ تم تفعيل الطلب: {request_id}")
+                return jsonify({"message": "تم تفعيل الطلب بنجاح"})
+        except ValueError:
+            pass
+            
+        return jsonify({"error": "لم يتم العثور على الطلب"}), 404
+            
+    except Exception as e:
+        print(f"خطأ في تفعيل الطلب: {str(e)}")
+        return jsonify({"error": "خطأ في الخادم"}), 500
+
+@app.route("/api/requests/delete", methods=["DELETE"])
+@require_auth("overtime")
+def delete_request_endpoint():
+    """حذف طلب نهائياً"""
+    try:
+        data = request.get_json()
+        request_id = data.get("id")
+        
+        if not request_id:
+            return jsonify({"error": "معرف الطلب مطلوب"}), 400
+        
+        from firebase_config import get_db
+        db = get_db()
+        
+        if not db:
+            return jsonify({"error": "Firebase غير متصل"}), 500
+        
+        # محاولة البحث بـ document ID أولاً
+        try:
+            doc_ref = db.collection('requests').document(request_id)
+            doc = doc_ref.get()
+            
+            if doc.exists:
+                doc_ref.delete()
+                print(f"✅ تم حذف الطلب: {request_id}")
+                return jsonify({"message": "تم حذف الطلب بنجاح"})
+        except:
+            pass
+            
+        # البحث عن الطلب بـ integer ID
+        requests_ref = db.collection('requests')
+        try:
+            query = requests_ref.where('id', '==', int(request_id))
+            docs = list(query.stream())
+            
+            if docs:
+                docs[0].reference.delete()
+                print(f"✅ تم حذف الطلب: {request_id}")
+                return jsonify({"message": "تم حذف الطلب بنجاح"})
+        except ValueError:
+            pass
+            
+        return jsonify({"error": "لم يتم العثور على الطلب"}), 404
+            
+    except Exception as e:
+        print(f"خطأ في حذف الطلب: {str(e)}")
         return jsonify({"error": "خطأ في الخادم"}), 500
 
 # === نقاط النهاية لمعالج الحضور (تبقى كما هي) ===
