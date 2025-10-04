@@ -3,15 +3,10 @@ import os
 import sys
 import tempfile
 import zipfile
-from datetime import datetime, date
-from typing import Dict, Any
-
-from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS
-from werkzeug.security import generate_password_hash, check_password_hash
-import jwt
-
-# استيراد إعداد Firebase
+from datetime import datetime
+import tempfile
+import zipfile
+import io
 from firebase_config import (
     initialize_firebase,
     get_user_by_username,
@@ -37,6 +32,66 @@ from attendance_processor import (
     parse_holidays,
 )
 from openpyxl import Workbook
+
+# قاموس الترجمات
+TRANSLATIONS = {
+    'ar': {
+        'summary_title': 'ملخص الحضور',
+        'daily_title': 'التفاصيل اليومية',
+        'times_title': 'جميع الأوقات',
+        'summary_filename': 'تقرير_الملخص.xlsx',
+        'daily_filename': 'التفاصيل_اليومية.xlsx',
+        'times_filename': 'جميع_الأوقات.xlsx',
+        'zip_filename': 'تقارير_الحضور',
+        'summary_headers': [
+            'رقم الموظف', 'اسم الموظف', 'القسم', 'أيام العمل المستهدفة', 'أيام الحضور',
+            'أيام الغياب', 'أيام الغياب (بدون عطل)', 'أيام إضافية', 'ساعات العمل',
+            'ساعات الإضافي', 'ساعات التأخير', 'عمل في العطل', 'أيام الخروج المفترض'
+        ],
+        'daily_headers': [
+            'رقم الموظف', 'اسم الموظف', 'القسم', 'التاريخ', 'أول دخول', 'آخر خروج',
+            'ساعات العمل', 'ساعات الإضافي', 'ساعات التأخير', 'عدد مرات الدخول/الخروج', 'يوم عطلة'
+        ],
+        'times_headers': [
+            'رقم الموظف', 'اسم الموظف', 'القسم', 'التاريخ', 'جميع أوقات الدخول والخروج', 'عدد المرات', 'يوم عطلة'
+        ],
+        'yes': 'نعم',
+        'no': 'لا',
+        'no_data': 'لا توجد بيانات',
+        'check_format': 'تحقق من تنسيق الملف',
+        'no_daily_data': 'لا توجد بيانات يومية'
+    },
+    'en': {
+        'summary_title': 'Attendance Summary',
+        'daily_title': 'Daily Details',
+        'times_title': 'All Times',
+        'summary_filename': 'Summary_Report.xlsx',
+        'daily_filename': 'Daily_Details.xlsx',
+        'times_filename': 'All_Times.xlsx',
+        'zip_filename': 'attendance_reports',
+        'summary_headers': [
+            'Employee ID', 'Employee Name', 'Department', 'Target Days', 'Work Days',
+            'Absent Days', 'Absent Days (Excl. Holidays)', 'Extra Days', 'Total Hours',
+            'Overtime Hours', 'Delay Hours', 'Worked on Holidays', 'Assumed Exit Days'
+        ],
+        'daily_headers': [
+            'Employee ID', 'Employee Name', 'Department', 'Date', 'First In', 'Last Out',
+            'Work Hours', 'Overtime Hours', 'Delay Hours', 'Times Count', 'Holiday'
+        ],
+        'times_headers': [
+            'Employee ID', 'Employee Name', 'Department', 'Date', 'All Times', 'Times Count', 'Holiday'
+        ],
+        'yes': 'Yes',
+        'no': 'No',
+        'no_data': 'No data',
+        'check_format': 'Check file format',
+        'no_daily_data': 'No daily data'
+    }
+}
+
+def get_translation(language, key):
+    """الحصول على الترجمة المناسبة"""
+    return TRANSLATIONS.get(language, TRANSLATIONS['ar']).get(key, key)
 
 app = Flask(__name__)
 CORS(app)  # Allow static site to call the API
@@ -563,6 +618,7 @@ def process_attendance():
             cutoff_hour = int(request.form.get("cutoff_hour", 7))
             fmt = request.form.get("format", "auto")
             allow_negative = request.form.get("allow_negative", "0") == "1"
+            language = request.form.get("language", "ar")
             
             # تشخيص الملف قبل المعالجة
             try:
@@ -641,11 +697,10 @@ def process_attendance():
                 # إنشاء ملف الملخص
                 summary_wb = Workbook()
                 summary_ws = summary_wb.active
-                summary_ws.title = "ملخص الحضور"
+                summary_ws.title = get_translation(language, 'summary_title')
                 
                 # إضافة عناوين الملخص
-                summary_headers = ["رقم الموظف", "اسم الموظف", "القسم", "أيام العمل المستهدفة", "أيام الحضور", 
-                                 "أيام الغياب", "ساعات العمل", "ساعات الإضافي", "ساعات التأخير"]
+                summary_headers = get_translation(language, 'summary_headers')
                 for col, header in enumerate(summary_headers, 1):
                     summary_ws.cell(row=1, column=col, value=header)
                 
@@ -658,29 +713,32 @@ def process_attendance():
                         summary_ws.cell(row=row, column=4, value=target_days)
                         summary_ws.cell(row=row, column=5, value=result.get('WorkDays', 0))
                         summary_ws.cell(row=row, column=6, value=result.get('AbsentDays', 0))
-                        summary_ws.cell(row=row, column=7, value=round(result.get('TotalHours', 0), 2))
-                        summary_ws.cell(row=row, column=8, value=round(result.get('OvertimeHours', 0), 2))
-                        summary_ws.cell(row=row, column=9, value=round(result.get('DelayHours', 0), 2))
+                        summary_ws.cell(row=row, column=7, value=result.get('AbsentDaysExclHolidays', 0))
+                        summary_ws.cell(row=row, column=8, value=result.get('ExtraDays', 0))
+                        summary_ws.cell(row=row, column=9, value=round(result.get('TotalHours', 0), 2))
+                        summary_ws.cell(row=row, column=10, value=round(result.get('OvertimeHours', 0), 2))
+                        summary_ws.cell(row=row, column=11, value=round(result.get('DelayHours', 0), 2))
+                        summary_ws.cell(row=row, column=12, value=result.get('WorkedOnHolidays', 0))
+                        summary_ws.cell(row=row, column=13, value=result.get('AssumedExitDays', 0))
                 else:
                     # إضافة رسالة عدم وجود بيانات
-                    summary_ws.cell(row=2, column=1, value="لا توجد بيانات")
-                    summary_ws.cell(row=2, column=2, value="تحقق من تنسيق الملف")
+                    summary_ws.cell(row=2, column=1, value=get_translation(language, 'no_data'))
+                    summary_ws.cell(row=2, column=2, value=get_translation(language, 'check_format'))
                 
                 # حفظ ملف الملخص في الذاكرة
                 summary_buffer = io.BytesIO()
                 summary_wb.save(summary_buffer)
                 summary_buffer.seek(0)
-                zip_file.writestr("Summary_Report.xlsx", summary_buffer.getvalue())
+                zip_file.writestr(get_translation(language, 'summary_filename'), summary_buffer.getvalue())
                 print(f"✅ تم إنشاء ملف الملخص مع {len(summary_results)} موظف")
                 
                 # إنشاء ملف التفاصيل اليومية
                 daily_wb = Workbook()
                 daily_ws = daily_wb.active
-                daily_ws.title = "التفاصيل اليومية"
+                daily_ws.title = get_translation(language, 'daily_title')
                 
                 # إضافة عناوين التفاصيل اليومية
-                daily_headers = ["رقم الموظف", "اسم الموظف", "التاريخ", "أول دخول", "آخر خروج", 
-                               "ساعات العمل", "ساعات الإضافي", "ساعات التأخير", "عدد مرات الدخول/الخروج"]
+                daily_headers = get_translation(language, 'daily_headers')
                 for col, header in enumerate(daily_headers, 1):
                     daily_ws.cell(row=1, column=col, value=header)
                 
@@ -700,32 +758,34 @@ def process_attendance():
                         
                         daily_ws.cell(row=row, column=1, value=daily.get('EmployeeID', ''))
                         daily_ws.cell(row=row, column=2, value=daily.get('Name', ''))
-                        daily_ws.cell(row=row, column=3, value=str(daily.get('Date', '')))
-                        daily_ws.cell(row=row, column=4, value=first_in)
-                        daily_ws.cell(row=row, column=5, value=last_out)
-                        daily_ws.cell(row=row, column=6, value=round(daily.get('DayHours', 0), 2))
-                        daily_ws.cell(row=row, column=7, value=round(daily.get('DayOvertimeHours', 0), 2))
-                        daily_ws.cell(row=row, column=8, value=round(daily.get('DayDelayHours', 0), 2))
-                        daily_ws.cell(row=row, column=9, value=daily.get('TimesCount', 0))
+                        daily_ws.cell(row=row, column=3, value=daily.get('Department', ''))
+                        daily_ws.cell(row=row, column=4, value=str(daily.get('Date', '')))
+                        daily_ws.cell(row=row, column=5, value=first_in)
+                        daily_ws.cell(row=row, column=6, value=last_out)
+                        daily_ws.cell(row=row, column=7, value=round(daily.get('DayHours', 0), 2))
+                        daily_ws.cell(row=row, column=8, value=round(daily.get('DayOvertimeHours', 0), 2))
+                        daily_ws.cell(row=row, column=9, value=round(daily.get('DayDelayHours', 0), 2))
+                        daily_ws.cell(row=row, column=10, value=daily.get('TimesCount', 0))
+                        daily_ws.cell(row=row, column=11, value=get_translation(language, 'yes') if daily.get('IsHoliday', 0) == 1 else get_translation(language, 'no'))
                 else:
                     # إضافة رسالة عدم وجود بيانات
-                    daily_ws.cell(row=2, column=1, value="لا توجد بيانات يومية")
-                    daily_ws.cell(row=2, column=2, value="تحقق من تنسيق الملف")
+                    daily_ws.cell(row=2, column=1, value=get_translation(language, 'no_daily_data'))
+                    daily_ws.cell(row=2, column=2, value=get_translation(language, 'check_format'))
                 
                 # حفظ ملف التفاصيل في الذاكرة
                 daily_buffer = io.BytesIO()
                 daily_wb.save(daily_buffer)
                 daily_buffer.seek(0)
-                zip_file.writestr("Daily_Details.xlsx", daily_buffer.getvalue())
+                zip_file.writestr(get_translation(language, 'daily_filename'), daily_buffer.getvalue())
                 print(f"✅ تم إنشاء ملف التفاصيل اليومية مع {len(daily_results)} سجل")
                 
                 # إنشاء ملف تفصيلي لجميع أوقات الدخول والخروج
                 times_wb = Workbook()
                 times_ws = times_wb.active
-                times_ws.title = "جميع الأوقات"
+                times_ws.title = get_translation(language, 'times_title')
                 
                 # إضافة عناوين ملف الأوقات
-                times_headers = ["رقم الموظف", "اسم الموظف", "التاريخ", "جميع أوقات الدخول والخروج", "عدد المرات"]
+                times_headers = get_translation(language, 'times_headers')
                 for col, header in enumerate(times_headers, 1):
                     times_ws.cell(row=1, column=col, value=header)
                 
@@ -734,24 +794,27 @@ def process_attendance():
                     for row, daily in enumerate(daily_results, 2):
                         times_ws.cell(row=row, column=1, value=daily.get('EmployeeID', ''))
                         times_ws.cell(row=row, column=2, value=daily.get('Name', ''))
-                        times_ws.cell(row=row, column=3, value=str(daily.get('Date', '')))
-                        times_ws.cell(row=row, column=4, value=daily.get('TimesList', ''))
-                        times_ws.cell(row=row, column=5, value=daily.get('TimesCount', 0))
+                        times_ws.cell(row=row, column=3, value=daily.get('Department', ''))
+                        times_ws.cell(row=row, column=4, value=str(daily.get('Date', '')))
+                        times_ws.cell(row=row, column=5, value=daily.get('TimesList', ''))
+                        times_ws.cell(row=row, column=6, value=daily.get('TimesCount', 0))
+                        times_ws.cell(row=row, column=7, value=get_translation(language, 'yes') if daily.get('IsHoliday', 0) == 1 else get_translation(language, 'no'))
                 
                 # حفظ ملف الأوقات في الذاكرة
                 times_buffer = io.BytesIO()
                 times_wb.save(times_buffer)
                 times_buffer.seek(0)
-                zip_file.writestr("All_Times.xlsx", times_buffer.getvalue())
+                zip_file.writestr(get_translation(language, 'times_filename'), times_buffer.getvalue())
                 print(f"✅ تم إنشاء ملف جميع الأوقات مع {len(daily_results)} سجل")
             
             zip_buffer.seek(0)
             
             # إرسال ملف ZIP
+            zip_filename = f"{get_translation(language, 'zip_filename')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
             return send_file(
                 zip_buffer,
                 as_attachment=True,
-                download_name=f"attendance_reports_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                download_name=zip_filename,
                 mimetype='application/zip'
             )
             
