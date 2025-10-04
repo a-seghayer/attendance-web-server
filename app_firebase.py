@@ -556,16 +556,98 @@ def process_attendance():
             fmt = request.form.get("format", "auto")
             allow_negative = request.form.get("allow_negative", "0") == "1"
             
+            # تشخيص الملف قبل المعالجة
+            try:
+                from openpyxl import load_workbook
+                wb = load_workbook(temp_path, data_only=True, read_only=True)
+                ws = wb[sheet_name] if sheet_name else wb.worksheets[0]
+                
+                print(f"تشخيص الملف:")
+                print(f"- اسم الورقة: {ws.title}")
+                print(f"- عدد الصفوف: {ws.max_row}")
+                print(f"- عدد الأعمدة: {ws.max_column}")
+                
+                # البحث عن "Employee ID:" في أول 20 صف
+                employee_found = False
+                print("- فحص أول 10 صفوف:")
+                for row_num in range(1, min(11, ws.max_row + 1)):
+                    cell_value = ws.cell(row=row_num, column=1).value
+                    print(f"  الصف {row_num}: '{cell_value}'")
+                    if cell_value and "Employee ID:" in str(cell_value):
+                        print(f"- ✅ وُجد 'Employee ID:' في الصف {row_num}: {cell_value}")
+                        employee_found = True
+                        break
+                
+                if not employee_found:
+                    print("- ⚠️ تحذير: لم يتم العثور على 'Employee ID:' في أول 10 صفوف")
+                    print("- 💡 تأكد من أن الملف يحتوي على 'Employee ID:' في العمود الأول")
+                    
+            except Exception as e:
+                print(f"خطأ في تشخيص الملف: {e}")
+            
             # استدعاء دالة المعالجة بجميع المعاملات
-            summary_results, daily_results = process_workbook(
-                path=temp_path,
-                sheet_name=sheet_name,
-                target_days=target_days,
-                holidays=holidays,
-                special_days=special_days,
-                fmt=fmt,
-                cutoff_hour=cutoff_hour
-            )
+            print(f"🔄 بدء معالجة الملف: {temp_path}")
+            print(f"📋 المعاملات:")
+            print(f"   - sheet: {sheet_name}")
+            print(f"   - target_days: {target_days}")
+            print(f"   - holidays: {holidays}")
+            print(f"   - special_days: {special_days}")
+            print(f"   - format: {fmt}")
+            print(f"   - cutoff_hour: {cutoff_hour}")
+            
+            try:
+                summary_results, daily_results = process_workbook(
+                    path=temp_path,
+                    sheet_name=sheet_name,
+                    target_days=target_days,
+                    holidays=holidays,
+                    special_days=special_days,
+                    fmt=fmt,
+                    cutoff_hour=cutoff_hour,
+                    dup_threshold_minutes=60,
+                    assume_missing_exit_hours=5.0
+                )
+                print(f"✅ تمت المعالجة بنجاح")
+            except Exception as processing_error:
+                print(f"❌ خطأ في المعالجة: {processing_error}")
+                import traceback
+                traceback.print_exc()
+                return jsonify({"error": f"خطأ في معالجة الملف: {str(processing_error)}"}), 500
+            
+            print(f"النتائج: summary={len(summary_results)}, daily={len(daily_results)}")
+            if summary_results:
+                print(f"أول نتيجة: {summary_results[0]}")
+            if daily_results:
+                print(f"أول تفصيل يومي: {daily_results[0]}")
+            
+            # التحقق من وجود نتائج
+            if not summary_results and not daily_results:
+                print("⚠️ لم يتم العثور على نتائج - إنشاء ملف تجريبي للتشخيص")
+                
+                # إنشاء بيانات تجريبية للتشخيص
+                summary_results = [{
+                    'employee_id': 'TEST_001',
+                    'target_days': target_days,
+                    'attendance_days': 0,
+                    'absent_days': target_days,
+                    'total_hours': 0,
+                    'overtime_hours': 0,
+                    'late_minutes': 0,
+                    'status': 'لم يتم العثور على بيانات في الملف'
+                }]
+                
+                daily_results = [{
+                    'employee_id': 'TEST_001',
+                    'date': '2024-01-01',
+                    'first_in': '',
+                    'last_out': '',
+                    'work_hours': 0,
+                    'overtime_hours': 0,
+                    'late_minutes': 0,
+                    'notes': 'لم يتم العثور على بيانات حضور في الملف المرفوع'
+                }]
+                
+                print("📝 تم إنشاء بيانات تجريبية للتشخيص")
             
             # إنشاء ملف ZIP يحتوي على التقارير
             zip_buffer = io.BytesIO()
@@ -583,15 +665,20 @@ def process_attendance():
                     summary_ws.cell(row=1, column=col, value=header)
                 
                 # إضافة بيانات الملخص
-                for row, result in enumerate(summary_results, 2):
-                    summary_ws.cell(row=row, column=1, value=result.get('employee_id', ''))
-                    summary_ws.cell(row=row, column=2, value=result.get('target_days', 0))
-                    summary_ws.cell(row=row, column=3, value=result.get('attendance_days', 0))
-                    summary_ws.cell(row=row, column=4, value=result.get('absent_days', 0))
-                    summary_ws.cell(row=row, column=5, value=result.get('total_hours', 0))
-                    summary_ws.cell(row=row, column=6, value=result.get('overtime_hours', 0))
-                    summary_ws.cell(row=row, column=7, value=result.get('late_minutes', 0))
-                    summary_ws.cell(row=row, column=8, value=result.get('status', ''))
+                if summary_results:
+                    for row, result in enumerate(summary_results, 2):
+                        summary_ws.cell(row=row, column=1, value=result.get('employee_id', ''))
+                        summary_ws.cell(row=row, column=2, value=result.get('target_days', 0))
+                        summary_ws.cell(row=row, column=3, value=result.get('attendance_days', 0))
+                        summary_ws.cell(row=row, column=4, value=result.get('absent_days', 0))
+                        summary_ws.cell(row=row, column=5, value=result.get('total_hours', 0))
+                        summary_ws.cell(row=row, column=6, value=result.get('overtime_hours', 0))
+                        summary_ws.cell(row=row, column=7, value=result.get('late_minutes', 0))
+                        summary_ws.cell(row=row, column=8, value=result.get('status', ''))
+                else:
+                    # إضافة رسالة عدم وجود بيانات
+                    summary_ws.cell(row=2, column=1, value="لا توجد بيانات")
+                    summary_ws.cell(row=2, column=2, value="تحقق من تنسيق الملف")
                 
                 # حفظ ملف الملخص في الذاكرة
                 summary_buffer = io.BytesIO()
@@ -611,15 +698,20 @@ def process_attendance():
                     daily_ws.cell(row=1, column=col, value=header)
                 
                 # إضافة بيانات التفاصيل اليومية
-                for row, daily in enumerate(daily_results, 2):
-                    daily_ws.cell(row=row, column=1, value=daily.get('employee_id', ''))
-                    daily_ws.cell(row=row, column=2, value=daily.get('date', ''))
-                    daily_ws.cell(row=row, column=3, value=daily.get('first_in', ''))
-                    daily_ws.cell(row=row, column=4, value=daily.get('last_out', ''))
-                    daily_ws.cell(row=row, column=5, value=daily.get('work_hours', 0))
-                    daily_ws.cell(row=row, column=6, value=daily.get('overtime_hours', 0))
-                    daily_ws.cell(row=row, column=7, value=daily.get('late_minutes', 0))
-                    daily_ws.cell(row=row, column=8, value=daily.get('notes', ''))
+                if daily_results:
+                    for row, daily in enumerate(daily_results, 2):
+                        daily_ws.cell(row=row, column=1, value=daily.get('employee_id', ''))
+                        daily_ws.cell(row=row, column=2, value=daily.get('date', ''))
+                        daily_ws.cell(row=row, column=3, value=daily.get('first_in', ''))
+                        daily_ws.cell(row=row, column=4, value=daily.get('last_out', ''))
+                        daily_ws.cell(row=row, column=5, value=daily.get('work_hours', 0))
+                        daily_ws.cell(row=row, column=6, value=daily.get('overtime_hours', 0))
+                        daily_ws.cell(row=row, column=7, value=daily.get('late_minutes', 0))
+                        daily_ws.cell(row=row, column=8, value=daily.get('notes', ''))
+                else:
+                    # إضافة رسالة عدم وجود بيانات
+                    daily_ws.cell(row=2, column=1, value="لا توجد بيانات يومية")
+                    daily_ws.cell(row=2, column=2, value="تحقق من تنسيق الملف")
                 
                 # حفظ ملف التفاصيل في الذاكرة
                 daily_buffer = io.BytesIO()
