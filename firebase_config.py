@@ -325,23 +325,54 @@ def get_latest_requests(limit=10):
     try:
         db = get_db()
         if not db:
+            print("❌ قاعدة البيانات غير متصلة")
             return []
             
+        print(f"🔍 البحث في collection 'requests' عن آخر {limit} طلبات...")
         requests_ref = db.collection('requests')
-        docs = requests_ref.order_by('createdAt', direction=firestore.Query.DESCENDING).limit(limit).stream()
+        
+        # محاولة جلب جميع الوثائق أولاً للتشخيص
+        all_docs = list(requests_ref.stream())
+        print(f"📊 العدد الكلي للطلبات في Firebase: {len(all_docs)}")
+        
+        if len(all_docs) == 0:
+            print("⚠️ لا توجد طلبات في قاعدة البيانات")
+            return []
+        
+        # جلب الطلبات مرتبة
+        try:
+            docs = requests_ref.order_by('createdAt', direction=firestore.Query.DESCENDING).limit(limit).stream()
+            docs_list = list(docs)
+            print(f"📋 تم جلب {len(docs_list)} طلب مرتب")
+        except Exception as e:
+            print(f"⚠️ خطأ في الترتيب، جلب بدون ترتيب: {e}")
+            docs_list = all_docs[:limit]
         
         requests = []
-        for doc in docs:
+        for i, doc in enumerate(docs_list):
             request_data = doc.to_dict()
             request_data['id'] = doc.id  # إضافة ID للطلب
             
+            print(f"   📝 طلب {i+1}: ID={doc.id}, البيانات={list(request_data.keys())}")
+            
             # تحويل التواريخ إلى نص
             if 'createdAt' in request_data and request_data['createdAt']:
-                request_data['created_at'] = request_data['createdAt'].strftime('%Y-%m-%d %H:%M:%S')
+                if hasattr(request_data['createdAt'], 'strftime'):
+                    request_data['created_at'] = request_data['createdAt'].strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    request_data['created_at'] = str(request_data['createdAt'])
+                    
             if 'executedAt' in request_data and request_data['executedAt']:
-                request_data['executed_at'] = request_data['executedAt'].strftime('%Y-%m-%d %H:%M:%S')
+                if hasattr(request_data['executedAt'], 'strftime'):
+                    request_data['executed_at'] = request_data['executedAt'].strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    request_data['executed_at'] = str(request_data['executedAt'])
+                    
             if 'canceledAt' in request_data and request_data['canceledAt']:
-                request_data['canceled_at'] = request_data['canceledAt'].strftime('%Y-%m-%d %H:%M:%S')
+                if hasattr(request_data['canceledAt'], 'strftime'):
+                    request_data['canceled_at'] = request_data['canceledAt'].strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    request_data['canceled_at'] = str(request_data['canceledAt'])
             
             # توحيد أسماء الحقول
             if 'employeeId' in request_data:
@@ -353,10 +384,13 @@ def get_latest_requests(limit=10):
                 
             requests.append(request_data)
             
+        print(f"✅ تم إرجاع {len(requests)} طلب بنجاح")
         return requests
         
     except Exception as e:
-        print(f"خطأ في جلب الطلبات: {str(e)}")
+        print(f"❌ خطأ في جلب الطلبات: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return []
 
 def cancel_request(request_id, canceled_by):

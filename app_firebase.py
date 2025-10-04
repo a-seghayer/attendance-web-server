@@ -576,6 +576,67 @@ def update_user():
 
 # === نقاط النهاية للطلبات ===
 
+@app.route("/api/firebase/status", methods=["GET"])
+def firebase_status():
+    """فحص حالة اتصال Firebase"""
+    try:
+        from firebase_config import get_db
+        db = get_db()
+        
+        if not db:
+            return jsonify({
+                "status": "disconnected",
+                "message": "Firebase غير متصل"
+            }), 500
+        
+        # محاولة جلب عدد الطلبات
+        try:
+            requests_ref = db.collection('requests')
+            all_docs = list(requests_ref.stream())
+            count = len(all_docs)
+            
+            return jsonify({
+                "status": "connected",
+                "message": "Firebase متصل بنجاح",
+                "requests_count": count
+            })
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "message": f"خطأ في الوصول للبيانات: {str(e)}"
+            }), 500
+            
+    except Exception as e:
+        return jsonify({
+            "status": "error", 
+            "message": f"خطأ في Firebase: {str(e)}"
+        }), 500
+
+@app.route("/api/requests/test", methods=["POST"])
+@require_auth("overtime")
+def create_test_request():
+    """إنشاء طلب تجريبي للاختبار"""
+    try:
+        # إنشاء طلب تجريبي
+        test_request = {
+            'employee_id': '12345',
+            'kind': 'overtime',
+            'date': '2025-01-01',
+            'reason': 'طلب تجريبي للاختبار',
+            'supervisor': request.user.get("sub", "test_supervisor")
+        }
+        
+        success = create_request(test_request)
+        
+        if success:
+            return jsonify({"message": "تم إنشاء طلب تجريبي بنجاح"})
+        else:
+            return jsonify({"error": "فشل في إنشاء الطلب التجريبي"}), 500
+            
+    except Exception as e:
+        print(f"خطأ في إنشاء الطلب التجريبي: {str(e)}")
+        return jsonify({"error": "خطأ في الخادم"}), 500
+
 @app.route("/api/requests/create", methods=["POST"])
 @require_auth("overtime")
 def create_request_endpoint():
@@ -632,12 +693,21 @@ def get_latest_requests_endpoint():
     """جلب أحدث الطلبات"""
     try:
         limit = int(request.args.get("limit", 10))
+        print(f"🔍 جلب أحدث {limit} طلبات...")
+        
         requests = get_latest_requests(limit)
+        print(f"📊 تم جلب {len(requests)} طلب من Firebase")
+        
+        # طباعة تفاصيل الطلبات للتشخيص
+        for i, req in enumerate(requests):
+            print(f"   طلب {i+1}: {req.get('employeeId', 'N/A')} - {req.get('kind', 'N/A')} - {req.get('status', 'N/A')}")
         
         return jsonify(requests)
         
     except Exception as e:
-        print(f"خطأ في جلب الطلبات: {str(e)}")
+        print(f"❌ خطأ في جلب الطلبات: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": "خطأ في الخادم"}), 500
 
 @app.route("/api/requests/cancel", methods=["POST"])
