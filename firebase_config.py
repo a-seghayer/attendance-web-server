@@ -60,11 +60,54 @@ def initialize_firebase():
         db = firestore.client()
         
         print("✅ تم تهيئة Firebase بنجاح")
+        
+        # إنشاء collections الأساسية إذا لم تكن موجودة
+        initialize_collections()
+        
         return True
         
     except Exception as e:
         print(f"❌ خطأ في تهيئة Firebase: {str(e)}")
         return False
+
+def initialize_collections():
+    """إنشاء collections الأساسية إذا لم تكن موجودة"""
+    try:
+        global db
+        if not db:
+            return
+            
+        print("🔧 التحقق من collections الأساسية...")
+        
+        # قائمة collections المطلوبة
+        required_collections = ['users', 'pendingUsers', 'requests']
+        
+        for collection_name in required_collections:
+            try:
+                # محاولة قراءة collection للتحقق من وجوده
+                collection_ref = db.collection(collection_name)
+                docs = list(collection_ref.limit(1).stream())
+                
+                if not docs:
+                    print(f"📁 إنشاء collection: {collection_name}")
+                    # إنشاء document وهمي لإنشاء collection
+                    dummy_doc = {
+                        '_initialized': True,
+                        'createdAt': datetime.utcnow(),
+                        'note': f'Auto-created {collection_name} collection'
+                    }
+                    collection_ref.document('_init').set(dummy_doc)
+                    print(f"✅ تم إنشاء collection: {collection_name}")
+                else:
+                    print(f"✅ collection موجود: {collection_name}")
+                    
+            except Exception as e:
+                print(f"⚠️ تحذير: مشكلة مع collection {collection_name}: {e}")
+                
+        print("🎯 تم التحقق من جميع collections الأساسية")
+        
+    except Exception as e:
+        print(f"❌ خطأ في تهيئة collections: {str(e)}")
 
 def get_db():
     """الحصول على مرجع قاعدة البيانات"""
@@ -206,20 +249,30 @@ def add_pending_user(username, password_hash):
         # التحقق من عدم وجود طلب معلق
         print(f"🔍 التحقق من وجود طلب معلق: {username}")
         pending_ref = db.collection('pendingUsers')
-        existing_pending = pending_ref.where('username', '==', username).stream()
-        if list(existing_pending):
-            print(f"❌ يوجد طلب معلق بالفعل: {username}")
-            return False
+        
+        try:
+            existing_pending = pending_ref.where('username', '==', username).stream()
+            if list(existing_pending):
+                print(f"❌ يوجد طلب معلق بالفعل: {username}")
+                return False
+        except Exception as e:
+            print(f"⚠️ تحذير: مشكلة في الوصول لـ collection pendingUsers: {e}")
+            # سنتابع العملية حتى لو كان هناك مشكلة في القراءة
             
         # الحصول على أعلى ID
         print(f"🔢 حساب ID جديد...")
-        all_pending = pending_ref.stream()
         max_id = 0
         
-        for pending in all_pending:
-            pending_dict = pending.to_dict()
-            if 'id' in pending_dict and pending_dict['id'] > max_id:
-                max_id = pending_dict['id']
+        try:
+            all_pending = pending_ref.stream()
+            for pending in all_pending:
+                pending_dict = pending.to_dict()
+                if 'id' in pending_dict and pending_dict['id'] > max_id:
+                    max_id = pending_dict['id']
+        except Exception as e:
+            print(f"⚠️ تحذير: مشكلة في قراءة الـ IDs الموجودة: {e}")
+            print(f"🆔 سيتم استخدام ID افتراضي: 1")
+            max_id = 0
         
         new_id = max_id + 1
         print(f"🆔 ID الجديد: {new_id}")
@@ -233,9 +286,23 @@ def add_pending_user(username, password_hash):
         }
         
         print(f"💾 إضافة البيانات إلى قاعدة البيانات...")
-        pending_ref.add(pending_data)
-        print(f"✅ تم إضافة طلب معلق: {username}")
-        return True
+        try:
+            doc_ref = pending_ref.add(pending_data)
+            print(f"✅ تم إضافة طلب معلق بنجاح: {username}")
+            print(f"📄 Document ID: {doc_ref[1].id}")
+            return True
+        except Exception as add_error:
+            print(f"❌ خطأ في إضافة البيانات: {add_error}")
+            # محاولة إنشاء collection جديد
+            print(f"🔄 محاولة إنشاء collection جديد...")
+            try:
+                # إضافة document أول لإنشاء collection
+                doc_ref = pending_ref.document().set(pending_data)
+                print(f"✅ تم إنشاء collection وإضافة الطلب: {username}")
+                return True
+            except Exception as create_error:
+                print(f"❌ فشل في إنشاء collection: {create_error}")
+                return False
         
     except Exception as e:
         print(f"❌ خطأ في إضافة الطلب المعلق: {str(e)}")

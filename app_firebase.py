@@ -308,7 +308,7 @@ def signup():
             return json_response({"message": "تم إرسال طلبك، في انتظار موافقة المدير"})
         else:
             print(f"❌ فشل في إضافة الطلب المعلق: {username}")
-            return json_response({"error": "فشل في إرسال الطلب. قد يكون اسم المستخدم موجود أو هناك مشكلة في قاعدة البيانات"}, 500)
+            return json_response({"error": "فشل في إرسال الطلب. تحقق من إعدادات قاعدة البيانات أو اتصل بالمدير"}, 500)
             
     except Exception as e:
         print(f"❌ خطأ في التسجيل: {str(e)}")
