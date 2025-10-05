@@ -288,10 +288,10 @@ def signup():
         password = data.get("password", "")
         
         if not username or not password:
-            return jsonify({"error": "اسم المستخدم وكلمة المرور مطلوبان"}), 400
+            return json_response({"error": "اسم المستخدم وكلمة المرور مطلوبان"}, 400)
         
         if len(password) < 6:
-            return jsonify({"error": "كلمة المرور يجب أن تكون 6 أحرف على الأقل"}), 400
+            return json_response({"error": "كلمة المرور يجب أن تكون 6 أحرف على الأقل"}, 400)
         
         # التحقق من عدم وجود المستخدم
         existing_user = get_user_by_username(username)
@@ -309,7 +309,7 @@ def signup():
             
     except Exception as e:
         print(f"خطأ في التسجيل: {str(e)}")
-        return jsonify({"error": "خطأ في الخادم"}), 500
+        return json_response({"error": "خطأ في الخادم"}, 500)
 
 # === نقاط النهاية الإدارية ===
 
