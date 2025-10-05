@@ -21,8 +21,12 @@ def get_employee_requests(employee_id: str, daily_data: List[Dict] = None, start
         try:
             from firebase_config import get_db
             db = get_db()
-        except ImportError:
-            print("⚠️ Firebase غير متاح، سيتم تجاهل الطلبات")
+            print(f"✅ تم الاتصال بـ Firebase بنجاح")
+        except ImportError as e:
+            print(f"⚠️ Firebase غير متاح: {e}")
+            return {"overtime_hours": 0, "leave_days": 0, "overtime_requests": [], "leave_requests": []}
+        except Exception as e:
+            print(f"⚠️ خطأ في الاتصال بـ Firebase: {e}")
             return {"overtime_hours": 0, "leave_days": 0, "overtime_requests": [], "leave_requests": []}
         
         if not db:
@@ -33,10 +37,27 @@ def get_employee_requests(employee_id: str, daily_data: List[Dict] = None, start
         
         # جلب جميع الطلبات للموظف باستخدام employeeId
         requests_ref = db.collection('requests')
-        query = requests_ref.where('employeeId', '==', str(employee_id))
         
+        # تجربة البحث بطرق مختلفة
+        print(f"🔎 البحث باستخدام employeeId = '{employee_id}' (string)")
+        query = requests_ref.where('employeeId', '==', str(employee_id))
         docs = list(query.stream())
         print(f"📋 تم العثور على {len(docs)} طلب للموظف {employee_id}")
+        
+        # إذا لم نجد شيء، جرب البحث بدون فلترة لرؤية البيانات
+        if len(docs) == 0:
+            print("🔍 لم يتم العثور على طلبات، جاري فحص جميع الطلبات...")
+            all_docs = list(requests_ref.limit(10).stream())
+            print(f"📋 عينة من الطلبات الموجودة ({len(all_docs)}):")
+            for doc in all_docs:
+                data = doc.to_dict()
+                print(f"   - ID: {doc.id}, employeeId: {data.get('employeeId')}, reqDate: {data.get('reqDate')}, kind: {data.get('kind')}")
+            
+            # جرب البحث مرة أخرى بقيم مختلفة
+            print(f"🔎 البحث مرة أخرى باستخدام employeeId = '{employee_id}'")
+            query2 = requests_ref.where('employeeId', '==', employee_id)
+            docs = list(query2.stream())
+            print(f"📋 النتيجة الثانية: {len(docs)} طلب")
         
         overtime_hours = 0
         leave_days = 0
@@ -67,12 +88,17 @@ def get_employee_requests(employee_id: str, daily_data: List[Dict] = None, start
                     request_date = request_date_str
                     
                 # فلترة التواريخ إذا تم تحديدها (التحقق من أن الطلب في نطاق فترة المعالجة)
-                if start_date and request_date < start_date:
-                    print(f"   ⏭️ طلب خارج النطاق (قبل): {request_date} < {start_date}")
-                    continue
-                if end_date and request_date > end_date:
-                    print(f"   ⏭️ طلب خارج النطاق (بعد): {request_date} > {end_date}")
-                    continue
+                # ملاحظة: إذا لم يتم تحديد فترة، سنقبل جميع الطلبات
+                if start_date and end_date:
+                    if request_date < start_date:
+                        print(f"   ⏭️ طلب خارج النطاق (قبل): {request_date} < {start_date}")
+                        continue
+                    if request_date > end_date:
+                        print(f"   ⏭️ طلب خارج النطاق (بعد): {request_date} > {end_date}")
+                        continue
+                    print(f"   ✅ طلب في النطاق: {request_date} بين {start_date} و {end_date}")
+                else:
+                    print(f"   ⚠️ لا توجد فترة محددة، قبول الطلب: {request_date}")
                     
                 request_type = data.get('kind', '')
                 request_reason = data.get('reason', '')
@@ -745,6 +771,8 @@ def process_workbook(path: str, sheet_name: Optional[str], target_days: int, hol
         employee_id = partial.get("EmployeeID")
         daily_data = partial.get("_daily", [])
         
+        print(f"🔄 معالجة الموظف {employee_id}")
+        
         # تحديد فترة التواريخ من البيانات اليومية
         start_date = None
         end_date = None
@@ -753,8 +781,13 @@ def process_workbook(path: str, sheet_name: Optional[str], target_days: int, hol
             if dates:
                 start_date = min(dates)
                 end_date = max(dates)
+                print(f"📅 فترة البيانات: من {start_date} إلى {end_date}")
+        else:
+            print("⚠️ لا توجد بيانات يومية للموظف")
         
+        print(f"🔗 استدعاء دالة جلب الطلبات للموظف {employee_id}")
         requests_data = get_employee_requests(employee_id, daily_data, start_date, end_date)
+        print(f"📊 نتيجة الطلبات: {requests_data}")
         
         res_row = {
             "EmployeeID": employee_id,
@@ -867,6 +900,12 @@ def write_summary(output_path: str, results: List[Dict[str, Any]], config: Dict[
         "Missing Punches",
         "Requested Overtime Hours",
         "Requested Leave Days",
+        "Overtime Requests Count",
+        "Leave Requests Count",
+        "Overtime Requests Dates",
+        "Leave Requests Dates",
+        "Overtime Requests Reasons",
+        "Leave Requests Reasons",
     ]
     ws.append(headers)
     for row in results:
@@ -884,6 +923,12 @@ def write_summary(output_path: str, results: List[Dict[str, Any]], config: Dict[
             row.get("AssumedExitDays"),  # Missing Punches
             row.get("RequestedOvertimeHours", 0),
             row.get("RequestedLeaveDays", 0),
+            row.get("OvertimeRequestsCount", 0),
+            row.get("LeaveRequestsCount", 0),
+            row.get("OvertimeRequestsDates", ""),
+            row.get("LeaveRequestsDates", ""),
+            row.get("OvertimeRequestsReasons", ""),
+            row.get("LeaveRequestsReasons", ""),
         ])
     # Add a config sheet
     ws2 = wb.create_sheet("Config")
@@ -909,6 +954,10 @@ def write_daily_details(output_path: str, daily_rows: List[Dict[str, Any]]):
         "IsHoliday",
         "DayOvertimeHours",
         "DayDelayHours",
+        "Has Overtime Request",
+        "Has Leave Request",
+        "Overtime Request Reason",
+        "Leave Request Reason",
     ]
     ws.append(headers)
     # Sort by employee then date
@@ -925,6 +974,10 @@ def write_daily_details(output_path: str, daily_rows: List[Dict[str, Any]]):
             row.get("IsHoliday"),
             row.get("DayOvertimeHours"),
             row.get("DayDelayHours"),
+            row.get("HasOvertimeRequest", False),
+            row.get("HasLeaveRequest", False),
+            row.get("OvertimeRequestReason", ""),
+            row.get("LeaveRequestReason", ""),
         ])
     wb.save(output_path)
 
