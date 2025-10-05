@@ -230,13 +230,30 @@ else:
                 'username': 'anas',
                 'password_hash': generate_password_hash(os.environ.get('DEFAULT_ADMIN_PASSWORD', 'TempPass123!')),
                 'is_superadmin': True,
-                'services': 'attendance,overtime',
+                'services': 'attendance,overtime,employees',
                 'is_active': True
             }
             create_user(admin_data)
             print("✅ تم إنشاء المستخدم الافتراضي 'anas'")
         else:
-            print("✅ المستخدم الافتراضي 'anas' موجود بالفعل")
+            # تحديث خدمات المستخدم الموجود إذا لم تحتوِ على employees
+            current_services = admin_user.get('services', '')
+            if 'employees' not in current_services:
+                updated_services = current_services + ',employees' if current_services else 'employees'
+                from firebase_config import db
+                if db:
+                    try:
+                        users_ref = db.collection('users')
+                        query = users_ref.where('username', '==', 'anas').limit(1)
+                        docs = list(query.stream())
+                        if docs:
+                            doc_ref = docs[0].reference
+                            doc_ref.update({'services': updated_services})
+                            print("✅ تم تحديث خدمات المستخدم الافتراضي لتشمل إدارة الموظفين")
+                    except Exception as update_error:
+                        print(f"⚠️ خطأ في تحديث خدمات المستخدم: {update_error}")
+            else:
+                print("✅ المستخدم الافتراضي 'anas' موجود بالفعل")
     except Exception as e:
         print(f"⚠️ خطأ في إنشاء المستخدم الافتراضي: {str(e)}")
 
