@@ -196,8 +196,8 @@ def token_required(f):
         
         try:
             # فك تشفير token
-            data = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
-            current_user = data['username']
+            data = jwt.decode(token, SECRET, algorithms=['HS256'])
+            current_user = data['sub']
         except jwt.ExpiredSignatureError:
             return jsonify({'error': 'Token has expired'}), 401
         except jwt.InvalidTokenError:
