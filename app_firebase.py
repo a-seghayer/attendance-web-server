@@ -374,24 +374,30 @@ def reject_user():
     """رفض طلب حساب"""
     try:
         if not request.user.get("admin"):
-            return jsonify({"error": "غير مسموح"}), 403
+            return json_response({"error": "غير مسموح"}, 403)
         
         data = request.get_json()
         username = data.get("username", "").strip()
         
+        print(f"🔄 طلب رفض مستخدم: {username}")
+        
         if not username:
-            return jsonify({"error": "اسم المستخدم مطلوب"}), 400
+            return json_response({"error": "اسم المستخدم مطلوب"}, 400)
         
         success = reject_pending_user(username)
         
         if success:
-            return jsonify({"message": "تم رفض المستخدم"})
+            print(f"✅ تم رفض المستخدم بنجاح: {username}")
+            return json_response({"message": "تم رفض المستخدم بنجاح"})
         else:
-            return jsonify({"error": "فشل في رفض المستخدم"}), 500
+            print(f"❌ فشل في رفض المستخدم: {username}")
+            return json_response({"error": "فشل في رفض المستخدم. قد يكون المستخدم غير موجود"}, 404)
             
     except Exception as e:
-        print(f"خطأ في رفض المستخدم: {str(e)}")
-        return jsonify({"error": "خطأ في الخادم"}), 500
+        print(f"❌ خطأ في رفض المستخدم: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return json_response({"error": "خطأ في الخادم"}, 500)
 
 @app.route("/api/admin/users", methods=["GET"])
 @require_auth()

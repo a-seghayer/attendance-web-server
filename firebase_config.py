@@ -211,23 +211,52 @@ def get_all_users():
 def get_pending_users():
     """جلب طلبات الحسابات المعلقة"""
     try:
+        print("🔄 جلب قائمة المستخدمين المعلقين...")
         db = get_db()
         if not db:
+            print("❌ فشل في الحصول على قاعدة البيانات")
             return []
             
         pending_ref = db.collection('pendingUsers')
-        docs = pending_ref.order_by('createdAt').stream()
         
-        pending_users = []
-        for doc in docs:
-            user_data = doc.to_dict()
-            user_data['doc_id'] = doc.id
-            pending_users.append(user_data)
+        try:
+            # تجاهل documents التهيئة
+            docs = pending_ref.where('_initialized', '!=', True).order_by('createdAt').stream()
             
-        return pending_users
+            pending_users = []
+            for doc in docs:
+                user_data = doc.to_dict()
+                # تجاهل documents التهيئة
+                if user_data.get('_initialized'):
+                    continue
+                    
+                user_data['doc_id'] = doc.id
+                pending_users.append(user_data)
+                print(f"📄 عثر على مستخدم معلق: {user_data.get('username', 'unknown')}")
+            
+            print(f"✅ تم جلب {len(pending_users)} مستخدم معلق")
+            return pending_users
+            
+        except Exception as query_error:
+            print(f"⚠️ خطأ في الاستعلام، محاولة بديلة: {query_error}")
+            # محاولة بديلة بدون order_by
+            docs = pending_ref.stream()
+            pending_users = []
+            for doc in docs:
+                user_data = doc.to_dict()
+                # تجاهل documents التهيئة
+                if user_data.get('_initialized'):
+                    continue
+                    
+                user_data['doc_id'] = doc.id
+                pending_users.append(user_data)
+                
+            return pending_users
         
     except Exception as e:
-        print(f"خطأ في جلب الطلبات المعلقة: {str(e)}")
+        print(f"❌ خطأ في جلب الطلبات المعلقة: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return []
 
 def add_pending_user(username, password_hash):
@@ -350,24 +379,38 @@ def approve_pending_user(username, services=""):
 def reject_pending_user(username):
     """رفض طلب حساب معلق"""
     try:
+        print(f"🔄 بدء رفض المستخدم المعلق: {username}")
         db = get_db()
         if not db:
+            print("❌ فشل في الحصول على قاعدة البيانات")
             return False
             
         # البحث عن الطلب المعلق وحذفه
         pending_ref = db.collection('pendingUsers')
-        pending_query = pending_ref.where('username', '==', username)
-        pending_docs = list(pending_query.stream())
+        print(f"🔍 البحث عن المستخدم في pendingUsers: {username}")
         
-        if pending_docs:
-            pending_docs[0].reference.delete()
-            print(f"✅ تم رفض المستخدم: {username}")
-            return True
+        try:
+            pending_query = pending_ref.where('username', '==', username)
+            pending_docs = list(pending_query.stream())
             
-        return False
+            if pending_docs:
+                for doc in pending_docs:
+                    print(f"🗑️ حذف document: {doc.id}")
+                    doc.reference.delete()
+                print(f"✅ تم رفض المستخدم بنجاح: {username}")
+                return True
+            else:
+                print(f"❌ لم يتم العثور على المستخدم في pendingUsers: {username}")
+                return False
+                
+        except Exception as query_error:
+            print(f"❌ خطأ في البحث عن المستخدم: {query_error}")
+            return False
         
     except Exception as e:
         print(f"❌ خطأ في رفض المستخدم: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return False
 
 # === وظائف الطلبات ===
