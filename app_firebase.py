@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-from werkzeug.security import check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 import jwt
 from firebase_config import (
     initialize_firebase,
