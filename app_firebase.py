@@ -1442,6 +1442,52 @@ def toggle_employee_status(current_user, employee_id):
         print(f"خطأ في تغيير حالة الموظف: {e}")
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/user/add-service", methods=["POST"])
+@token_required
+def add_user_service(current_user):
+    """إضافة خدمة لمستخدم"""
+    try:
+        data = request.get_json()
+        service_name = data.get('service', '')
+        
+        if not service_name:
+            return jsonify({"error": "اسم الخدمة مطلوب"}), 400
+        
+        # جلب بيانات المستخدم الحالي
+        from firebase_config import get_user_by_username, db
+        user_data = get_user_by_username(current_user)
+        
+        if not user_data:
+            return jsonify({"error": "المستخدم غير موجود"}), 404
+        
+        # تحديث خدمات المستخدم
+        current_services = user_data.get('services', '')
+        services_list = [s.strip() for s in current_services.split(',') if s.strip()]
+        
+        if service_name not in services_list:
+            services_list.append(service_name)
+            updated_services = ','.join(services_list)
+            
+            # تحديث في قاعدة البيانات
+            if db:
+                users_ref = db.collection('users')
+                query = users_ref.where('username', '==', current_user).limit(1)
+                docs = list(query.stream())
+                if docs:
+                    doc_ref = docs[0].reference
+                    doc_ref.update({'services': updated_services})
+                    
+                    return jsonify({
+                        "message": f"تم إضافة خدمة {service_name} بنجاح",
+                        "services": updated_services
+                    })
+        
+        return jsonify({"message": "الخدمة موجودة بالفعل"})
+        
+    except Exception as e:
+        print(f"خطأ في إضافة الخدمة: {e}")
+        return jsonify({"error": str(e)}), 500
+
 # === نقاط النهاية العامة ===
 
 @app.route("/api/health", methods=["GET"])
