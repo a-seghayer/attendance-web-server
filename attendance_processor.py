@@ -452,6 +452,27 @@ def analyze_file(path: str, sheet_name: Optional[str] = None) -> Dict[str, Any]:
         if file_format == "unknown" and employees_found > 0:
             file_format = "legacy"  # افتراض legacy إذا لم نتمكن من التحديد
         
+        # جلب إحصائيات الطلبات للفترة المحددة
+        overtime_requests_count = 0
+        leave_requests_count = 0
+        
+        if first_date and last_date:
+            try:
+                # جلب جميع الطلبات النشطة للفترة
+                all_requests = get_all_active_requests(first_date, last_date)
+                
+                # حساب إجمالي الطلبات
+                for employee_id, requests_data in all_requests.items():
+                    overtime_requests_count += len(requests_data.get('overtime_requests', []))
+                    leave_requests_count += len(requests_data.get('leave_requests', []))
+                
+                print(f"📊 إحصائيات الطلبات للفترة {first_date} - {last_date}:")
+                print(f"   - طلبات الإضافي: {overtime_requests_count}")
+                print(f"   - طلبات الإجازة: {leave_requests_count}")
+                
+            except Exception as e:
+                print(f"⚠️ خطأ في جلب إحصائيات الطلبات: {e}")
+        
         return {
             "employees_count": employees_found,
             "file_format": file_format,
@@ -461,6 +482,8 @@ def analyze_file(path: str, sheet_name: Optional[str] = None) -> Dict[str, Any]:
             "total_rows": nrows,
             "sheet_name": ws.title,
             "dates_found": len(all_dates),
+            "overtime_requests_count": overtime_requests_count,
+            "leave_requests_count": leave_requests_count,
             "success": True
         }
         
@@ -1082,39 +1105,29 @@ def write_summary(output_path: str, results: List[Dict[str, Any]], config: Dict[
         "Extra Days",
         "Total Hours",
         "Overtime Hours",
-        "Delay Hours",
-        "Missing Punches",
         "Requested Overtime Hours",
-        "Requested Leave Days",
+        "Delay Hours",
         "Overtime Requests Count",
         "Leave Requests Count",
-        "Overtime Requests Dates",
-        "Leave Requests Dates",
-        "Overtime Requests Reasons",
-        "Leave Requests Reasons",
+        "Missing Punches",
     ]
     ws.append(headers)
     for row in results:
         ws.append([
-            row.get("EmployeeID"),
-            row.get("Name"),
-            row.get("Department"),
-            row.get("WorkDays"),
-            row.get("AbsentDays"),
-            row.get("WorkedOnHolidays"),
-            row.get("ExtraDays"),
-            row.get("TotalHours"),
-            row.get("OvertimeHours"),
-            row.get("DelayHours"),
-            row.get("AssumedExitDays"),  # Missing Punches
-            row.get("RequestedOvertimeHours", 0),
-            row.get("RequestedLeaveDays", 0),
-            row.get("OvertimeRequestsCount", 0),
-            row.get("LeaveRequestsCount", 0),
-            row.get("OvertimeRequestsDates", ""),
-            row.get("LeaveRequestsDates", ""),
-            row.get("OvertimeRequestsReasons", ""),
-            row.get("LeaveRequestsReasons", ""),
+            row.get("EmployeeID"),                      # Employee ID
+            row.get("Name"),                            # Employee Name
+            row.get("Department"),                      # Department
+            row.get("WorkDays"),                        # Work Days
+            row.get("AbsentDays"),                      # Absent Days
+            row.get("WorkedOnHolidays"),                # Worked on Holidays
+            row.get("ExtraDays"),                       # Extra Days
+            row.get("TotalHours"),                      # Total Hours
+            row.get("OvertimeHours"),                   # Overtime Hours
+            row.get("RequestedOvertimeHours", 0),       # Requested Overtime Hours
+            row.get("DelayHours"),                      # Delay Hours
+            row.get("OvertimeRequestsCount", 0),        # Overtime Requests Count
+            row.get("LeaveRequestsCount", 0),           # Leave Requests Count
+            row.get("AssumedExitDays"),                 # Missing Punches
         ])
     # Add a config sheet
     ws2 = wb.create_sheet("Config")

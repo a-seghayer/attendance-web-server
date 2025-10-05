@@ -46,11 +46,9 @@ TRANSLATIONS = {
         'times_filename': 'جميع_الأوقات.xlsx',
         'zip_filename': 'تقارير_الحضور',
         'summary_headers': [
-                'رقم الموظف', 'اسم الموظف', 'القسم', 'أيام العمل المستهدفة', 'أيام الحضور',
-                'أيام الغياب', 'أيام الغياب (بدون عطل)', 'أيام إضافية', 'ساعات العمل',
-                'ساعات الإضافي', 'ساعات التأخير', 'عمل في العطل', 'البصمات المنسية',
-                'ساعات إضافي مطلوبة', 'أيام إجازة مطلوبة', 'عدد طلبات الإضافي', 'عدد طلبات الإجازة',
-                'تواريخ طلبات الإضافي', 'تواريخ طلبات الإجازة', 'أسباب طلبات الإضافي', 'أسباب طلبات الإجازة'
+                'رقم الموظف', 'اسم الموظف', 'القسم', 'أيام الحضور', 'أيام الغياب',
+                'عمل في العطل', 'أيام إضافية', 'ساعات العمل', 'ساعات الإضافي',
+                'ساعات إضافي مطلوبة', 'ساعات التأخير', 'عدد طلبات الإضافي', 'عدد طلبات الإجازة', 'البصمات المنسية'
             ],
         'daily_headers': [
             'رقم الموظف', 'اسم الموظف', 'القسم', 'التاريخ', 'أول دخول', 'آخر خروج',
@@ -75,11 +73,9 @@ TRANSLATIONS = {
         'times_filename': 'All_Times.xlsx',
         'zip_filename': 'attendance_reports',
         'summary_headers': [
-            'Employee ID', 'Employee Name', 'Department', 'Target Days', 'Work Days',
-            'Absent Days', 'Absent Days (Excl. Holidays)', 'Extra Days', 'Total Hours',
-            'Overtime Hours', 'Delay Hours', 'Worked on Holidays', 'Missing Punches',
-            'Requested Overtime Hours', 'Requested Leave Days', 'Overtime Requests Count', 'Leave Requests Count',
-            'Overtime Requests Dates', 'Leave Requests Dates', 'Overtime Requests Reasons', 'Leave Requests Reasons'
+            'Employee ID', 'Employee Name', 'Department', 'Work Days', 'Absent Days',
+            'Worked on Holidays', 'Extra Days', 'Total Hours', 'Overtime Hours',
+            'Requested Overtime Hours', 'Delay Hours', 'Overtime Requests Count', 'Leave Requests Count', 'Missing Punches'
         ],
         'daily_headers': [
             'Employee ID', 'Employee Name', 'Department', 'Date', 'First In', 'Last Out',
@@ -919,6 +915,8 @@ def analyze_attendance_file():
             print(f"   - أول تاريخ: {analysis_result.get('first_date', 'N/A')}")
             print(f"   - آخر تاريخ: {analysis_result.get('last_date', 'N/A')}")
             print(f"   - عدد الأيام: {analysis_result.get('period_days', 0)}")
+            print(f"   - طلبات الإضافي: {analysis_result.get('overtime_requests_count', 0)}")
+            print(f"   - طلبات الإجازة: {analysis_result.get('leave_requests_count', 0)}")
             
             return jsonify({
                 "success": True,
@@ -1069,29 +1067,21 @@ def process_attendance():
                         
                         # البيانات متوفرة بالفعل من attendance_processor
                         
-                        summary_ws.cell(row=row, column=1, value=employee_id)
-                        summary_ws.cell(row=row, column=2, value=result.get('Name', ''))
-                        summary_ws.cell(row=row, column=3, value=result.get('Department', ''))
-                        summary_ws.cell(row=row, column=4, value=target_days)
-                        summary_ws.cell(row=row, column=5, value=result.get('WorkDays', 0))
-                        summary_ws.cell(row=row, column=6, value=result.get('AbsentDays', 0))
-                        summary_ws.cell(row=row, column=7, value=result.get('AbsentDaysExclHolidays', 0))
-                        summary_ws.cell(row=row, column=8, value=result.get('ExtraDays', 0))
-                        summary_ws.cell(row=row, column=9, value=round(result.get('TotalHours', 0), 2))
-                        summary_ws.cell(row=row, column=10, value=round(result.get('OvertimeHours', 0), 2))
-                        summary_ws.cell(row=row, column=11, value=round(result.get('DelayHours', 0), 2))
-                        summary_ws.cell(row=row, column=12, value=result.get('WorkedOnHolidays', 0))
-                        summary_ws.cell(row=row, column=13, value=result.get('AssumedExitDays', 0))
-                        # استخدام البيانات الجديدة من attendance_processor
-                        summary_ws.cell(row=row, column=14, value=round(result.get('RequestedOvertimeHours', 0), 2))
-                        summary_ws.cell(row=row, column=15, value=result.get('RequestedLeaveDays', 0))
-                        # إضافة الأعمدة الجديدة
-                        summary_ws.cell(row=row, column=16, value=result.get('OvertimeRequestsCount', 0))
-                        summary_ws.cell(row=row, column=17, value=result.get('LeaveRequestsCount', 0))
-                        summary_ws.cell(row=row, column=18, value=result.get('OvertimeRequestsDates', ''))
-                        summary_ws.cell(row=row, column=19, value=result.get('LeaveRequestsDates', ''))
-                        summary_ws.cell(row=row, column=20, value=result.get('OvertimeRequestsReasons', ''))
-                        summary_ws.cell(row=row, column=21, value=result.get('LeaveRequestsReasons', ''))
+                        # الترتيب الجديد للأعمدة
+                        summary_ws.cell(row=row, column=1, value=employee_id)                                    # Employee ID
+                        summary_ws.cell(row=row, column=2, value=result.get('Name', ''))                        # Employee Name
+                        summary_ws.cell(row=row, column=3, value=result.get('Department', ''))                  # Department
+                        summary_ws.cell(row=row, column=4, value=result.get('WorkDays', 0))                     # Work Days
+                        summary_ws.cell(row=row, column=5, value=result.get('AbsentDays', 0))                   # Absent Days
+                        summary_ws.cell(row=row, column=6, value=result.get('WorkedOnHolidays', 0))             # Worked on Holidays
+                        summary_ws.cell(row=row, column=7, value=result.get('ExtraDays', 0))                    # Extra Days
+                        summary_ws.cell(row=row, column=8, value=round(result.get('TotalHours', 0), 2))         # Total Hours
+                        summary_ws.cell(row=row, column=9, value=round(result.get('OvertimeHours', 0), 2))      # Overtime Hours
+                        summary_ws.cell(row=row, column=10, value=round(result.get('RequestedOvertimeHours', 0), 2))  # Requested Overtime Hours
+                        summary_ws.cell(row=row, column=11, value=round(result.get('DelayHours', 0), 2))        # Delay Hours
+                        summary_ws.cell(row=row, column=12, value=result.get('OvertimeRequestsCount', 0))       # Overtime Requests Count
+                        summary_ws.cell(row=row, column=13, value=result.get('LeaveRequestsCount', 0))          # Leave Requests Count
+                        summary_ws.cell(row=row, column=14, value=result.get('AssumedExitDays', 0))             # Missing Punches
                 else:
                     # إضافة رسالة عدم وجود بيانات
                     summary_ws.cell(row=2, column=1, value=get_translation(language, 'no_data'))
