@@ -1258,6 +1258,119 @@ def process_attendance():
         else:
             return jsonify({"error": f"خطأ في معالجة الملف: {error_msg}"}), 500
 
+# === إدارة الموظفين ===
+
+@app.route("/api/employees", methods=["GET"])
+@token_required
+def get_employees(current_user):
+    """جلب قائمة الموظفين"""
+    try:
+        from firebase_config import get_all_employees
+        employees = get_all_employees()
+        return jsonify(employees)
+    except Exception as e:
+        print(f"خطأ في جلب الموظفين: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/employees", methods=["POST"])
+@token_required
+def create_employee(current_user):
+    """إنشاء موظف جديد"""
+    try:
+        data = request.get_json()
+        
+        # التحقق من البيانات المطلوبة
+        required_fields = ['employee_id', 'name', 'department']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({"error": f"الحقل {field} مطلوب"}), 400
+        
+        from firebase_config import create_employee as create_emp
+        employee_id = create_emp(data)
+        
+        return jsonify({
+            "message": "تم إنشاء الموظف بنجاح",
+            "id": employee_id
+        }), 201
+        
+    except Exception as e:
+        print(f"خطأ في إنشاء الموظف: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/employees/<employee_id>", methods=["GET"])
+@token_required
+def get_employee(current_user, employee_id):
+    """جلب بيانات موظف محدد"""
+    try:
+        from firebase_config import get_employee_by_id
+        employee = get_employee_by_id(employee_id)
+        
+        if not employee:
+            return jsonify({"error": "الموظف غير موجود"}), 404
+            
+        return jsonify(employee)
+        
+    except Exception as e:
+        print(f"خطأ في جلب بيانات الموظف: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/employees/<employee_id>", methods=["PUT"])
+@token_required
+def update_employee(current_user, employee_id):
+    """تحديث بيانات موظف"""
+    try:
+        data = request.get_json()
+        
+        from firebase_config import update_employee as update_emp
+        success = update_emp(employee_id, data)
+        
+        if not success:
+            return jsonify({"error": "فشل في تحديث الموظف"}), 400
+            
+        return jsonify({"message": "تم تحديث الموظف بنجاح"})
+        
+    except Exception as e:
+        print(f"خطأ في تحديث الموظف: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/employees/<employee_id>", methods=["DELETE"])
+@token_required
+def delete_employee(current_user, employee_id):
+    """حذف موظف"""
+    try:
+        from firebase_config import delete_employee as delete_emp
+        success = delete_emp(employee_id)
+        
+        if not success:
+            return jsonify({"error": "فشل في حذف الموظف"}), 400
+            
+        return jsonify({"message": "تم حذف الموظف بنجاح"})
+        
+    except Exception as e:
+        print(f"خطأ في حذف الموظف: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/employees/<employee_id>/toggle", methods=["POST"])
+@token_required
+def toggle_employee_status(current_user, employee_id):
+    """تفعيل/تعطيل موظف"""
+    try:
+        data = request.get_json()
+        active = data.get('active', True)
+        
+        from firebase_config import toggle_employee_status as toggle_emp
+        success = toggle_emp(employee_id, active)
+        
+        if not success:
+            return jsonify({"error": "فشل في تغيير حالة الموظف"}), 400
+            
+        status_text = "تفعيل" if active else "تعطيل"
+        return jsonify({"message": f"تم {status_text} الموظف بنجاح"})
+        
+    except Exception as e:
+        print(f"خطأ في تغيير حالة الموظف: {e}")
+        return jsonify({"error": str(e)}), 500
+
 # === نقاط النهاية العامة ===
 
 @app.route("/api/health", methods=["GET"])

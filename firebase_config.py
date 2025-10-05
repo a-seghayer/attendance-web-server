@@ -633,6 +633,194 @@ def cancel_request(request_id, canceled_by):
         print(f"❌ خطأ في إلغاء الطلب: {str(e)}")
         return False
 
+# === دوال إدارة الموظفين ===
+
+def get_all_employees():
+    """جلب جميع الموظفين"""
+    try:
+        if not db:
+            print("❌ قاعدة البيانات غير متاحة")
+            return []
+            
+        employees_ref = db.collection('employees')
+        docs = employees_ref.stream()
+        
+        employees = []
+        for doc in docs:
+            employee_data = doc.to_dict()
+            employee_data['id'] = doc.id
+            employees.append(employee_data)
+            
+        print(f"✅ تم جلب {len(employees)} موظف")
+        return employees
+        
+    except Exception as e:
+        print(f"❌ خطأ في جلب الموظفين: {str(e)}")
+        return []
+
+def create_employee(employee_data):
+    """إنشاء موظف جديد"""
+    try:
+        if not db:
+            print("❌ قاعدة البيانات غير متاحة")
+            return None
+            
+        # إضافة البيانات الافتراضية
+        employee_data.update({
+            'created_at': datetime.utcnow(),
+            'updated_at': datetime.utcnow(),
+            'status': 'active'
+        })
+        
+        # التحقق من عدم وجود موظف بنفس الرقم
+        existing = db.collection('employees').where('employee_id', '==', employee_data['employee_id']).limit(1).stream()
+        if list(existing):
+            raise Exception(f"موظف برقم {employee_data['employee_id']} موجود بالفعل")
+        
+        # إنشاء الموظف
+        doc_ref = db.collection('employees').add(employee_data)
+        employee_id = doc_ref[1].id
+        
+        print(f"✅ تم إنشاء الموظف: {employee_data['name']} ({employee_data['employee_id']})")
+        return employee_id
+        
+    except Exception as e:
+        print(f"❌ خطأ في إنشاء الموظف: {str(e)}")
+        raise e
+
+def get_employee_by_id(employee_id):
+    """جلب موظف بالمعرف"""
+    try:
+        if not db:
+            print("❌ قاعدة البيانات غير متاحة")
+            return None
+            
+        doc_ref = db.collection('employees').document(employee_id)
+        doc = doc_ref.get()
+        
+        if doc.exists:
+            employee_data = doc.to_dict()
+            employee_data['id'] = doc.id
+            return employee_data
+        else:
+            return None
+            
+    except Exception as e:
+        print(f"❌ خطأ في جلب الموظف: {str(e)}")
+        return None
+
+def update_employee(employee_id, update_data):
+    """تحديث بيانات موظف"""
+    try:
+        if not db:
+            print("❌ قاعدة البيانات غير متاحة")
+            return False
+            
+        # إضافة تاريخ التحديث
+        update_data['updated_at'] = datetime.utcnow()
+        
+        doc_ref = db.collection('employees').document(employee_id)
+        doc_ref.update(update_data)
+        
+        print(f"✅ تم تحديث الموظف: {employee_id}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ خطأ في تحديث الموظف: {str(e)}")
+        return False
+
+def delete_employee(employee_id):
+    """حذف موظف"""
+    try:
+        if not db:
+            print("❌ قاعدة البيانات غير متاحة")
+            return False
+            
+        doc_ref = db.collection('employees').document(employee_id)
+        doc_ref.delete()
+        
+        print(f"✅ تم حذف الموظف: {employee_id}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ خطأ في حذف الموظف: {str(e)}")
+        return False
+
+def toggle_employee_status(employee_id, active):
+    """تفعيل/تعطيل موظف"""
+    try:
+        if not db:
+            print("❌ قاعدة البيانات غير متاحة")
+            return False
+            
+        status = 'active' if active else 'inactive'
+        doc_ref = db.collection('employees').document(employee_id)
+        doc_ref.update({
+            'status': status,
+            'updated_at': datetime.utcnow()
+        })
+        
+        status_text = "تفعيل" if active else "تعطيل"
+        print(f"✅ تم {status_text} الموظف: {employee_id}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ خطأ في تغيير حالة الموظف: {str(e)}")
+        return False
+
+def sync_employee_from_attendance(employee_id, name, department):
+    """مزامنة بيانات موظف من ملف الحضور"""
+    try:
+        if not db:
+            print("❌ قاعدة البيانات غير متاحة")
+            return False
+            
+        # البحث عن الموظف الموجود
+        existing_query = db.collection('employees').where('employee_id', '==', employee_id).limit(1)
+        existing_docs = list(existing_query.stream())
+        
+        if existing_docs:
+            # تحديث البيانات الموجودة
+            doc_ref = existing_docs[0].reference
+            current_data = existing_docs[0].to_dict()
+            
+            # تحديث الاسم والقسم إذا تغيرا
+            updates = {}
+            if current_data.get('name') != name:
+                updates['name'] = name
+            if current_data.get('department') != department:
+                updates['department'] = department
+                
+            if updates:
+                updates['updated_at'] = datetime.utcnow()
+                updates['synced_from_attendance'] = True
+                doc_ref.update(updates)
+                print(f"✅ تم تحديث الموظف من ملف الحضور: {employee_id} - {name}")
+            
+        else:
+            # إنشاء موظف جديد
+            employee_data = {
+                'employee_id': employee_id,
+                'name': name,
+                'department': department,
+                'email': None,
+                'phone': None,
+                'start_date': None,
+                'status': 'active',
+                'created_at': datetime.utcnow(),
+                'updated_at': datetime.utcnow(),
+                'synced_from_attendance': True
+            }
+            
+            db.collection('employees').add(employee_data)
+            print(f"✅ تم إنشاء موظف جديد من ملف الحضور: {employee_id} - {name}")
+            
+        return True
+        
+    except Exception as e:
+        print(f"❌ خطأ في مزامنة الموظف: {str(e)}")
+        return False
+
 # تهيئة Firebase عند استيراد الملف
 if __name__ != "__main__":
     initialize_firebase()
