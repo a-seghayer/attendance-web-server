@@ -413,6 +413,61 @@ def reject_pending_user(username):
         traceback.print_exc()
         return False
 
+def delete_user(username):
+    """حذف مستخدم نهائياً من النظام"""
+    try:
+        print(f"🔄 بدء حذف المستخدم: {username}")
+        db = get_db()
+        if not db:
+            print("❌ فشل في الحصول على قاعدة البيانات")
+            return False
+        
+        # البحث عن المستخدم وحذفه
+        users_ref = db.collection('users')
+        print(f"🔍 البحث عن المستخدم في users: {username}")
+        
+        try:
+            user_query = users_ref.where('username', '==', username)
+            user_docs = list(user_query.stream())
+            
+            if user_docs:
+                deleted_count = 0
+                for doc in user_docs:
+                    print(f"🗑️ حذف document: {doc.id}")
+                    doc.reference.delete()
+                    deleted_count += 1
+                
+                print(f"✅ تم حذف المستخدم بنجاح: {username} ({deleted_count} documents)")
+                
+                # حذف طلبات المستخدم أيضاً (اختياري)
+                try:
+                    requests_ref = db.collection('requests')
+                    user_requests = requests_ref.where('employeeId', '==', username).stream()
+                    requests_deleted = 0
+                    for req_doc in user_requests:
+                        req_doc.reference.delete()
+                        requests_deleted += 1
+                    
+                    if requests_deleted > 0:
+                        print(f"🗑️ تم حذف {requests_deleted} طلب للمستخدم")
+                except Exception as req_error:
+                    print(f"⚠️ تحذير: مشكلة في حذف طلبات المستخدم: {req_error}")
+                
+                return True
+            else:
+                print(f"❌ لم يتم العثور على المستخدم: {username}")
+                return False
+                
+        except Exception as query_error:
+            print(f"❌ خطأ في البحث عن المستخدم: {query_error}")
+            return False
+        
+    except Exception as e:
+        print(f"❌ خطأ في حذف المستخدم: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
 # === وظائف الطلبات ===
 
 def create_request(request_data):

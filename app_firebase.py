@@ -18,6 +18,7 @@ from firebase_config import (
     add_pending_user,
     approve_pending_user,
     reject_pending_user,
+    delete_user,
     create_request,
     get_latest_requests,
     cancel_request
@@ -395,6 +396,46 @@ def reject_user():
             
     except Exception as e:
         print(f"❌ خطأ في رفض المستخدم: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return json_response({"error": "خطأ في الخادم"}, 500)
+
+@app.route("/api/admin/delete", methods=["POST"])
+@require_auth()
+def delete_user_endpoint():
+    """حذف مستخدم نهائياً"""
+    try:
+        if not request.user.get("admin"):
+            return json_response({"error": "غير مسموح"}, 403)
+        
+        data = request.get_json()
+        username = data.get("username", "").strip()
+        
+        print(f"🔄 طلب حذف مستخدم: {username}")
+        
+        if not username:
+            return json_response({"error": "اسم المستخدم مطلوب"}, 400)
+        
+        # التحقق من عدم حذف المدير الحالي
+        if username == request.user.get("username"):
+            return json_response({"error": "لا يمكن حذف حسابك الخاص"}, 400)
+        
+        # التحقق من وجود المستخدم
+        existing_user = get_user_by_username(username)
+        if not existing_user:
+            return json_response({"error": "المستخدم غير موجود"}, 404)
+        
+        success = delete_user(username)
+        
+        if success:
+            print(f"✅ تم حذف المستخدم بنجاح: {username}")
+            return json_response({"message": f"تم حذف المستخدم '{username}' نهائياً"})
+        else:
+            print(f"❌ فشل في حذف المستخدم: {username}")
+            return json_response({"error": "فشل في حذف المستخدم"}, 500)
+            
+    except Exception as e:
+        print(f"❌ خطأ في حذف المستخدم: {str(e)}")
         import traceback
         traceback.print_exc()
         return json_response({"error": "خطأ في الخادم"}, 500)
