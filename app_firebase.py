@@ -300,16 +300,21 @@ def signup():
         
         # إضافة طلب معلق
         password_hash = generate_password_hash(password)
+        print(f"🔄 محاولة إضافة طلب معلق للمستخدم: {username}")
         success = add_pending_user(username, password_hash)
         
         if success:
+            print(f"✅ تم إضافة الطلب المعلق بنجاح: {username}")
             return json_response({"message": "تم إرسال طلبك، في انتظار موافقة المدير"})
         else:
-            return json_response({"error": "فشل في إرسال الطلب"}, 500)
+            print(f"❌ فشل في إضافة الطلب المعلق: {username}")
+            return json_response({"error": "فشل في إرسال الطلب. قد يكون اسم المستخدم موجود أو هناك مشكلة في قاعدة البيانات"}, 500)
             
     except Exception as e:
-        print(f"خطأ في التسجيل: {str(e)}")
-        return json_response({"error": "خطأ في الخادم"}, 500)
+        print(f"❌ خطأ في التسجيل: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return json_response({"error": f"خطأ في الخادم: {str(e)}"}, 500)
 
 # === نقاط النهاية الإدارية ===
 

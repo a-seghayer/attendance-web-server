@@ -45,7 +45,11 @@ def initialize_firebase():
                 service_account_path = 'temp_service_account.json'
         
         if not service_account_path:
-            print("❌ لم يتم العثور على مفتاح الخدمة")
+            print("❌ لم يتم العثور على مفتاح الخدمة Firebase")
+            print("💡 تحتاج إلى:")
+            print("   1. تحميل ملف serviceAccountKey.json من Firebase Console")
+            print("   2. وضعه في مجلد web_server")
+            print("   3. أو تعيين متغير البيئة FIREBASE_CREDENTIALS")
             return False
         
         # تهيئة Firebase
@@ -66,7 +70,17 @@ def get_db():
     """الحصول على مرجع قاعدة البيانات"""
     global db
     if db is None:
-        initialize_firebase()
+        print("🔄 تهيئة Firebase...")
+        success = initialize_firebase()
+        if not success:
+            print("❌ فشل في تهيئة Firebase")
+            return None
+    
+    if db is None:
+        print("❌ قاعدة البيانات غير متاحة")
+        return None
+    
+    print("✅ قاعدة البيانات متاحة")
     return db
 
 # === وظائف المستخدمين ===
@@ -176,22 +190,29 @@ def get_pending_users():
 def add_pending_user(username, password_hash):
     """إضافة طلب حساب معلق"""
     try:
+        print(f"🔄 بدء إضافة طلب معلق: {username}")
         db = get_db()
         if not db:
+            print("❌ فشل في الحصول على قاعدة البيانات")
             return False
             
         # التحقق من عدم وجود المستخدم
+        print(f"🔍 التحقق من وجود المستخدم: {username}")
         existing_user = get_user_by_username(username)
         if existing_user:
+            print(f"❌ المستخدم موجود بالفعل: {username}")
             return False
             
         # التحقق من عدم وجود طلب معلق
+        print(f"🔍 التحقق من وجود طلب معلق: {username}")
         pending_ref = db.collection('pendingUsers')
         existing_pending = pending_ref.where('username', '==', username).stream()
         if list(existing_pending):
+            print(f"❌ يوجد طلب معلق بالفعل: {username}")
             return False
             
         # الحصول على أعلى ID
+        print(f"🔢 حساب ID جديد...")
         all_pending = pending_ref.stream()
         max_id = 0
         
@@ -200,14 +221,18 @@ def add_pending_user(username, password_hash):
             if 'id' in pending_dict and pending_dict['id'] > max_id:
                 max_id = pending_dict['id']
         
+        new_id = max_id + 1
+        print(f"🆔 ID الجديد: {new_id}")
+        
         # إضافة الطلب المعلق
         pending_data = {
-            'id': max_id + 1,
+            'id': new_id,
             'username': username,
             'passwordHash': password_hash,
             'createdAt': datetime.utcnow()
         }
         
+        print(f"💾 إضافة البيانات إلى قاعدة البيانات...")
         pending_ref.add(pending_data)
         print(f"✅ تم إضافة طلب معلق: {username}")
         return True
@@ -353,7 +378,7 @@ def get_latest_requests(limit=10):
             request_data = doc.to_dict()
             request_data['id'] = doc.id  # إضافة ID للطلب
             
-            print(f"   📝 طلب {i+1}: ID={doc.id}, البيانات={list(request_data.keys())}")
+            print(f"   📝 طلب {i+1}: ID={doc.id}, الحالة={request_data.get('status', 'N/A')}, البيانات={list(request_data.keys())}")
             
             # تحويل التواريخ إلى نص
             if 'createdAt' in request_data and request_data['createdAt']:
