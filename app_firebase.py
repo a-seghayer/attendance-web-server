@@ -174,6 +174,39 @@ app.config['JSONIFY_PRETTYPRINT_REGULAR'] = True
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max file size
 app.config['UPLOAD_TIMEOUT'] = 300  # 5 minutes timeout
 
+# JWT Secret Key
+JWT_SECRET = os.environ.get('JWT_SECRET', 'your-secret-key-here')
+
+def token_required(f):
+    """Decorator للتحقق من صحة JWT token"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        
+        # البحث عن token في header
+        if 'Authorization' in request.headers:
+            auth_header = request.headers['Authorization']
+            try:
+                token = auth_header.split(" ")[1]  # Bearer TOKEN
+            except IndexError:
+                return jsonify({'error': 'Invalid token format'}), 401
+        
+        if not token:
+            return jsonify({'error': 'Token is missing'}), 401
+        
+        try:
+            # فك تشفير token
+            data = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+            current_user = data['username']
+        except jwt.ExpiredSignatureError:
+            return jsonify({'error': 'Token has expired'}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({'error': 'Token is invalid'}), 401
+        
+        return f(current_user, *args, **kwargs)
+    
+    return decorated
+
 # Helper function for UTF-8 JSON responses
 def json_response(data, status_code=200):
     """Create JSON response with proper UTF-8 encoding for Arabic text"""
@@ -1096,6 +1129,27 @@ def process_attendance():
             if not summary_results and not daily_results:
                 print("⚠️ لم يتم العثور على نتائج - المعالجة فشلت")
                 return jsonify({"error": "لم يتم العثور على بيانات صالحة في الملف"}), 400
+            
+            # مزامنة بيانات الموظفين مع قاعدة البيانات
+            print("🔄 بدء مزامنة بيانات الموظفين...")
+            synced_employees = 0
+            try:
+                from firebase_config import sync_employee_from_attendance
+                
+                for employee_data in summary_results:
+                    employee_id = str(employee_data.get('EmployeeID', ''))
+                    name = employee_data.get('Name', '')
+                    department = employee_data.get('Department', '')
+                    
+                    if employee_id and name and department:
+                        if sync_employee_from_attendance(employee_id, name, department):
+                            synced_employees += 1
+                
+                print(f"✅ تم مزامنة {synced_employees} موظف مع قاعدة البيانات")
+                
+            except Exception as sync_error:
+                print(f"⚠️ خطأ في مزامنة الموظفين: {sync_error}")
+                # لا نوقف المعالجة بسبب خطأ المزامنة
             
             # إنشاء ملف ZIP يحتوي على التقارير
             print(f"📦 إنشاء ملف ZIP مع {len(summary_results)} موظف و {len(daily_results)} سجل يومي")
