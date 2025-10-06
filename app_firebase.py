@@ -1158,6 +1158,10 @@ def process_attendance():
             include_summary = request.form.get("include_summary", "1") == "1"
             include_daily = request.form.get("include_daily", "1") == "1"
             
+            print(f"📋 خيارات الملفات المطلوبة:")
+            print(f"   - تقرير الملخص: {'نعم' if include_summary else 'لا'}")
+            print(f"   - التفاصيل اليومية: {'نعم' if include_daily else 'لا'}")
+            
             # التحقق من أن المستخدم اختار نوع ملف واحد على الأقل
             if not include_summary and not include_daily:
                 return jsonify({"error": "يجب اختيار نوع ملف واحد على الأقل (ملخص أو يومي)"}), 400
@@ -1268,43 +1272,41 @@ def process_attendance():
                 
                 # إنشاء ملف الملخص إذا كان مطلوباً
                 if include_summary:
-                    print("✅ تم إنشاء ملف الملخص مع 72 موظف")
+                    print("📊 إنشاء ملف الملخص...")
                     summary_wb = Workbook()
                     summary_ws = summary_wb.active
                     summary_ws.title = get_translation(language, 'summary_title')
-                
-                # إضافة عناوين الملخص
-                summary_headers = get_translation(language, 'summary_headers')
-                for col, header in enumerate(summary_headers, 1):
-                    summary_ws.cell(row=1, column=col, value=header)
-                
-                # إضافة بيانات الملخص
-                if summary_results:
-                    for row, result in enumerate(summary_results, 2):
-                        employee_id = result.get('EmployeeID', '')
-                        
-                        # البيانات متوفرة بالفعل من attendance_processor
-                        
-                        # الترتيب الجديد للأعمدة
-                        summary_ws.cell(row=row, column=1, value=employee_id)                                    # Employee ID
-                        summary_ws.cell(row=row, column=2, value=result.get('Name', ''))                        # Employee Name
-                        summary_ws.cell(row=row, column=3, value=result.get('Department', ''))                  # Department
-                        summary_ws.cell(row=row, column=4, value=result.get('WorkDays', 0))                     # Work Days
-                        summary_ws.cell(row=row, column=5, value=result.get('AbsentDays', 0))                   # Absent Days
-                        summary_ws.cell(row=row, column=6, value=result.get('WorkedOnHolidays', 0))             # Worked on Holidays
-                        summary_ws.cell(row=row, column=7, value=result.get('ExtraDays', 0))                    # Extra Days
-                        summary_ws.cell(row=row, column=8, value=round(result.get('TotalHours', 0), 2))         # Total Hours
-                        summary_ws.cell(row=row, column=9, value=round(result.get('OvertimeHours', 0), 2))      # Overtime Hours
-                        summary_ws.cell(row=row, column=10, value=round(result.get('RequestedOvertimeHours', 0), 2))  # Requested Overtime Hours
-                        summary_ws.cell(row=row, column=11, value=round(result.get('DelayHours', 0), 2))        # Delay Hours
-                        summary_ws.cell(row=row, column=12, value=result.get('OvertimeRequestsCount', 0))       # Overtime Requests Count
-                        summary_ws.cell(row=row, column=13, value=result.get('LeaveRequestsCount', 0))          # Leave Requests Count
-                        summary_ws.cell(row=row, column=14, value=result.get('AssumedExitDays', 0))             # Missing Punches
-                else:
-                    # إضافة رسالة عدم وجود بيانات
-                    summary_ws.cell(row=2, column=1, value=get_translation(language, 'no_data'))
-                    summary_ws.cell(row=2, column=2, value=get_translation(language, 'check_format'))
-                
+                    
+                    # إضافة عناوين الملخص
+                    summary_headers = get_translation(language, 'summary_headers')
+                    for col, header in enumerate(summary_headers, 1):
+                        summary_ws.cell(row=1, column=col, value=header)
+                    
+                    # إضافة بيانات الملخص
+                    if summary_results:
+                        for row, result in enumerate(summary_results, 2):
+                            employee_id = result.get('EmployeeID', '')
+                            
+                            # الترتيب الجديد للأعمدة
+                            summary_ws.cell(row=row, column=1, value=employee_id)                                    # Employee ID
+                            summary_ws.cell(row=row, column=2, value=result.get('Name', ''))                        # Employee Name
+                            summary_ws.cell(row=row, column=3, value=result.get('Department', ''))                  # Department
+                            summary_ws.cell(row=row, column=4, value=result.get('WorkDays', 0))                     # Work Days
+                            summary_ws.cell(row=row, column=5, value=result.get('AbsentDays', 0))                   # Absent Days
+                            summary_ws.cell(row=row, column=6, value=result.get('WorkedOnHolidays', 0))             # Worked on Holidays
+                            summary_ws.cell(row=row, column=7, value=result.get('ExtraDays', 0))                    # Extra Days
+                            summary_ws.cell(row=row, column=8, value=round(result.get('TotalHours', 0), 2))         # Total Hours
+                            summary_ws.cell(row=row, column=9, value=round(result.get('OvertimeHours', 0), 2))      # Overtime Hours
+                            summary_ws.cell(row=row, column=10, value=round(result.get('RequestedOvertimeHours', 0), 2))  # Requested Overtime Hours
+                            summary_ws.cell(row=row, column=11, value=round(result.get('DelayHours', 0), 2))        # Delay Hours
+                            summary_ws.cell(row=row, column=12, value=result.get('OvertimeRequestsCount', 0))       # Overtime Requests Count
+                            summary_ws.cell(row=row, column=13, value=result.get('LeaveRequestsCount', 0))          # Leave Requests Count
+                            summary_ws.cell(row=row, column=14, value=result.get('AssumedExitDays', 0))             # Missing Punches
+                    else:
+                        # إضافة رسالة عدم وجود بيانات
+                        summary_ws.cell(row=2, column=1, value=get_translation(language, 'no_data'))
+                        summary_ws.cell(row=2, column=2, value=get_translation(language, 'check_format'))
+                    
                     # حفظ ملف الملخص في الذاكرة
                     summary_buffer = io.BytesIO()
                     summary_wb.save(summary_buffer)
@@ -1364,39 +1366,20 @@ def process_attendance():
                     daily_buffer.seek(0)
                     zip_file.writestr(get_translation(language, 'daily_filename'), daily_buffer.getvalue())
                     print(f"✅ تم إنشاء ملف التفاصيل اليومية مع {len(daily_results)} سجل")
-                
-                # إنشاء ملف تفصيلي لجميع أوقات الدخول والخروج
-                times_wb = Workbook()
-                times_ws = times_wb.active
-                times_ws.title = get_translation(language, 'times_title')
-                
-                # إضافة عناوين ملف الأوقات
-                times_headers = get_translation(language, 'times_headers')
-                for col, header in enumerate(times_headers, 1):
-                    times_ws.cell(row=1, column=col, value=header)
-                
-                # إضافة بيانات الأوقات
-                if daily_results:
-                    for row, daily in enumerate(daily_results, 2):
-                        times_ws.cell(row=row, column=1, value=daily.get('EmployeeID', ''))
-                        times_ws.cell(row=row, column=2, value=daily.get('Name', ''))
-                        times_ws.cell(row=row, column=3, value=daily.get('Department', ''))
-                        times_ws.cell(row=row, column=4, value=str(daily.get('Date', '')))
-                        times_ws.cell(row=row, column=5, value=daily.get('TimesList', ''))
-                        times_ws.cell(row=row, column=6, value=daily.get('TimesCount', 0))
-                        times_ws.cell(row=row, column=7, value=get_translation(language, 'yes') if daily.get('IsHoliday', 0) == 1 else get_translation(language, 'no'))
-                
-                # حفظ ملف الأوقات في الذاكرة
-                times_buffer = io.BytesIO()
-                times_wb.save(times_buffer)
-                times_buffer.seek(0)
-                zip_file.writestr(get_translation(language, 'times_filename'), times_buffer.getvalue())
-                print(f"✅ تم إنشاء ملف جميع الأوقات مع {len(daily_results)} سجل")
             
             zip_buffer.seek(0)
             
+            # طباعة ملخص الملفات المُنشأة
+            created_files = []
+            if include_summary:
+                created_files.append("ملف الملخص")
+            if include_daily:
+                created_files.append("ملف التفاصيل اليومية")
+            
+            print(f"📦 تم إنشاء ملف ZIP يحتوي على: {', '.join(created_files)}")
+            
             # إرسال ملف ZIP
-            zip_filename = f"{get_translation(language, 'zip_filename')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+            zip_filename = f"{get_translation(language, 'zip_filename')}_{datetime.now().strftime('%Y%m%dT%H%M%S')}.zip"
             return send_file(
                 zip_buffer,
                 as_attachment=True,
