@@ -796,6 +796,9 @@ def sync_employee_from_attendance(employee_id, name, department):
                 updates['synced_from_attendance'] = True
                 doc_ref.update(updates)
                 print(f"✅ تم تحديث الموظف من ملف الحضور: {employee_id} - {name}")
+                return 'updated'
+            else:
+                return 'exists'
             
         else:
             # إنشاء موظف جديد
@@ -814,8 +817,7 @@ def sync_employee_from_attendance(employee_id, name, department):
             
             db.collection('employees').add(employee_data)
             print(f"✅ تم إنشاء موظف جديد من ملف الحضور: {employee_id} - {name}")
-            
-        return True
+            return 'created'
         
     except Exception as e:
         print(f"❌ خطأ في مزامنة الموظف: {str(e)}")

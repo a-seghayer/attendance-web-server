@@ -10,6 +10,69 @@ from openpyxl.workbook import Workbook
 EMPLOYEE_MARKER = "Employee ID:"
 
 
+def extract_employees_basic(file_path: str) -> List[Dict[str, str]]:
+    """
+    استخراج بيانات الموظفين الأساسية فقط من ملف Excel بسرعة
+    بدون معالجة كاملة - فقط للمزامنة
+    """
+    employees = []
+    
+    try:
+        print(f"📖 قراءة ملف Excel: {file_path}")
+        wb = load_workbook(file_path, read_only=True, data_only=True)
+        
+        # استخدام أول ورقة
+        ws = wb.active
+        print(f"📋 ورقة العمل: {ws.title}, الصفوف: {ws.max_row}")
+        
+        # البحث عن الموظفين
+        for row_idx in range(1, min(ws.max_row + 1, 2000)):  # حد أقصى 2000 صف للسرعة
+            try:
+                cell_value = ws.cell(row=row_idx, column=1).value
+                if not cell_value:
+                    continue
+                
+                cell_str = str(cell_value).strip()
+                
+                # البحث عن بداية بيانات موظف
+                if EMPLOYEE_MARKER in cell_str:
+                    # استخراج البيانات من السطر
+                    parts = cell_str.split(',')
+                    employee_data = {}
+                    
+                    for part in parts:
+                        part = part.strip()
+                        if ':' in part:
+                            key, value = part.split(':', 1)
+                            key = key.strip()
+                            value = value.strip()
+                            
+                            if key == "Employee ID":
+                                employee_data['EmployeeID'] = value
+                            elif key == "First Name":
+                                employee_data['Name'] = value
+                            elif key == "Department":
+                                employee_data['Department'] = value
+                    
+                    # التأكد من وجود البيانات المطلوبة
+                    if all(k in employee_data for k in ['EmployeeID', 'Name', 'Department']):
+                        employees.append(employee_data)
+                        if len(employees) % 20 == 0:  # طباعة التقدم
+                            print(f"📊 تم العثور على {len(employees)} موظف...")
+            
+            except Exception as e:
+                # تجاهل الأخطاء في الصفوف الفردية
+                continue
+        
+        wb.close()
+        print(f"✅ تم استخراج {len(employees)} موظف من الملف")
+        return employees
+        
+    except Exception as e:
+        print(f"❌ خطأ في استخراج الموظفين: {e}")
+        return []
+
+
 def get_all_active_requests(start_date: date = None, end_date: date = None) -> Dict[str, Dict[str, Any]]:
     """
     جلب جميع الطلبات النشطة من Firebase مرة واحدة وتنظيمها حسب employeeId
