@@ -796,9 +796,6 @@ def sync_employee_from_attendance(employee_id, name, department):
                 updates['synced_from_attendance'] = True
                 doc_ref.update(updates)
                 print(f"✅ تم تحديث الموظف من ملف الحضور: {employee_id} - {name}")
-                return 'updated'
-            else:
-                return 'exists'
             
         else:
             # إنشاء موظف جديد
@@ -817,11 +814,100 @@ def sync_employee_from_attendance(employee_id, name, department):
             
             db.collection('employees').add(employee_data)
             print(f"✅ تم إنشاء موظف جديد من ملف الحضور: {employee_id} - {name}")
-            return 'created'
+            
+        return True
         
     except Exception as e:
         print(f"❌ خطأ في مزامنة الموظف: {str(e)}")
         return False
+
+def sync_employees_batch(employees_data: list) -> dict:
+    """
+    مزامنة مجموعة من الموظفين مع قاعدة البيانات
+    إرجاع إحصائيات المزامنة
+    """
+    try:
+        db = get_db()
+        if not db:
+            return {"error": "قاعدة البيانات غير متاحة"}
+        
+        stats = {
+            "total": len(employees_data),
+            "created": 0,
+            "updated": 0,
+            "errors": 0,
+            "processed": 0
+        }
+        
+        print(f"🔄 بدء مزامنة {len(employees_data)} موظف...")
+        
+        for i, employee in enumerate(employees_data):
+            try:
+                employee_id = employee.get('EmployeeID')
+                name = employee.get('Name')
+                department = employee.get('Department', 'غير محدد')
+                
+                if not employee_id or not name:
+                    stats["errors"] += 1
+                    continue
+                
+                # البحث عن الموظف الموجود
+                employees_ref = db.collection('employees')
+                query = employees_ref.where('employee_id', '==', employee_id).limit(1)
+                existing = list(query.stream())
+                
+                if existing:
+                    # تحديث الموظف الموجود
+                    doc_ref = existing[0].reference
+                    existing_data = existing[0].to_dict()
+                    
+                    # تحديث فقط إذا تغيرت البيانات
+                    if existing_data.get('name') != name or existing_data.get('department') != department:
+                        doc_ref.update({
+                            'name': name,
+                            'department': department,
+                            'updated_at': datetime.utcnow(),
+                            'synced_from_attendance': True
+                        })
+                        stats["updated"] += 1
+                        print(f"✅ تم تحديث الموظف: {employee_id} - {name}")
+                    
+                else:
+                    # إنشاء موظف جديد
+                    employee_data = {
+                        'employee_id': employee_id,
+                        'name': name,
+                        'department': department,
+                        'email': None,
+                        'phone': None,
+                        'start_date': None,
+                        'status': 'active',
+                        'created_at': datetime.utcnow(),
+                        'updated_at': datetime.utcnow(),
+                        'synced_from_attendance': True
+                    }
+                    
+                    db.collection('employees').add(employee_data)
+                    stats["created"] += 1
+                    print(f"✅ تم إنشاء موظف جديد: {employee_id} - {name}")
+                
+                stats["processed"] += 1
+                
+                # تقرير التقدم كل 10 موظفين
+                if (i + 1) % 10 == 0:
+                    progress = ((i + 1) / len(employees_data)) * 100
+                    print(f"📊 التقدم: {progress:.1f}% ({i + 1}/{len(employees_data)})")
+                
+            except Exception as emp_error:
+                print(f"❌ خطأ في معالجة الموظف {employee.get('EmployeeID', 'غير معروف')}: {emp_error}")
+                stats["errors"] += 1
+        
+        print(f"✅ انتهت المزامنة - إنشاء: {stats['created']}, تحديث: {stats['updated']}, أخطاء: {stats['errors']}")
+        return stats
+        
+    except Exception as e:
+        print(f"❌ خطأ في مزامنة الموظفين: {str(e)}")
+        return {"error": str(e)}
 
 # تهيئة Firebase عند استيراد الملف
 if __name__ != "__main__":

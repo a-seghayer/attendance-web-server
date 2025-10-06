@@ -10,67 +10,76 @@ from openpyxl.workbook import Workbook
 EMPLOYEE_MARKER = "Employee ID:"
 
 
-def extract_employees_basic(file_path: str) -> List[Dict[str, str]]:
+def extract_employees_from_file(file_path: str) -> List[Dict[str, str]]:
     """
-    استخراج بيانات الموظفين الأساسية فقط من ملف Excel بسرعة
-    بدون معالجة كاملة - فقط للمزامنة
+    استخراج بيانات الموظفين من ملف Excel بدون معالجة الحضور
+    يُستخدم للمزامنة السريعة مع قاعدة البيانات
     """
-    employees = []
-    
     try:
-        print(f"📖 قراءة ملف Excel: {file_path}")
-        wb = load_workbook(file_path, read_only=True, data_only=True)
+        print(f"🔍 استخراج بيانات الموظفين من: {file_path}")
         
-        # استخدام أول ورقة
-        ws = wb.active
-        print(f"📋 ورقة العمل: {ws.title}, الصفوف: {ws.max_row}")
+        wb = load_workbook(file_path, data_only=True, read_only=True)
+        ws = wb.worksheets[0]  # استخدام الورقة الأولى
         
-        # البحث عن الموظفين
-        for row_idx in range(1, min(ws.max_row + 1, 2000)):  # حد أقصى 2000 صف للسرعة
-            try:
-                cell_value = ws.cell(row=row_idx, column=1).value
-                if not cell_value:
-                    continue
-                
-                cell_str = str(cell_value).strip()
-                
-                # البحث عن بداية بيانات موظف
-                if EMPLOYEE_MARKER in cell_str:
-                    # استخراج البيانات من السطر
-                    parts = cell_str.split(',')
-                    employee_data = {}
-                    
-                    for part in parts:
-                        part = part.strip()
-                        if ':' in part:
-                            key, value = part.split(':', 1)
-                            key = key.strip()
-                            value = value.strip()
-                            
-                            if key == "Employee ID":
-                                employee_data['EmployeeID'] = value
-                            elif key == "First Name":
-                                employee_data['Name'] = value
-                            elif key == "Department":
-                                employee_data['Department'] = value
-                    
-                    # التأكد من وجود البيانات المطلوبة
-                    if all(k in employee_data for k in ['EmployeeID', 'Name', 'Department']):
-                        employees.append(employee_data)
-                        if len(employees) % 20 == 0:  # طباعة التقدم
-                            print(f"📊 تم العثور على {len(employees)} موظف...")
+        employees = []
+        current_row = 1
+        max_rows = ws.max_row
+        
+        print(f"📊 فحص {max_rows} صف للبحث عن الموظفين...")
+        
+        while current_row <= max_rows:
+            cell_value = ws.cell(row=current_row, column=1).value
             
-            except Exception as e:
-                # تجاهل الأخطاء في الصفوف الفردية
-                continue
+            if cell_value and EMPLOYEE_MARKER in str(cell_value):
+                # استخراج بيانات الموظف
+                employee_data = parse_employee_line(str(cell_value))
+                if employee_data:
+                    employees.append(employee_data)
+                    print(f"👤 موظف #{len(employees)}: {employee_data['EmployeeID']} - {employee_data['Name']}")
+            
+            current_row += 1
         
         wb.close()
-        print(f"✅ تم استخراج {len(employees)} موظف من الملف")
+        print(f"✅ تم استخراج {len(employees)} موظف")
         return employees
         
     except Exception as e:
-        print(f"❌ خطأ في استخراج الموظفين: {e}")
+        print(f"❌ خطأ في استخراج بيانات الموظفين: {e}")
         return []
+
+
+def parse_employee_line(line: str) -> Optional[Dict[str, str]]:
+    """
+    تحليل سطر بيانات الموظف واستخراج المعلومات
+    مثال: "Employee ID: 102,First Name: Ali,Department: Driver support"
+    """
+    try:
+        parts = line.split(',')
+        employee_data = {}
+        
+        for part in parts:
+            part = part.strip()
+            if ':' in part:
+                key, value = part.split(':', 1)
+                key = key.strip()
+                value = value.strip()
+                
+                if key == "Employee ID":
+                    employee_data['EmployeeID'] = value
+                elif key in ["First Name", "Name"]:
+                    employee_data['Name'] = value
+                elif key == "Department":
+                    employee_data['Department'] = value
+        
+        # التحقق من وجود البيانات الأساسية
+        if 'EmployeeID' in employee_data and 'Name' in employee_data:
+            return employee_data
+        
+        return None
+        
+    except Exception as e:
+        print(f"❌ خطأ في تحليل سطر الموظف: {e}")
+        return None
 
 
 def get_all_active_requests(start_date: date = None, end_date: date = None) -> Dict[str, Dict[str, Any]]:
