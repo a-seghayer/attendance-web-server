@@ -823,7 +823,7 @@ def sync_employee_from_attendance(employee_id, name, department):
 
 def sync_employees_batch(employees_data: list) -> dict:
     """
-    مزامنة مجموعة من الموظفين مع قاعدة البيانات
+    مزامنة مجموعة من الموظفين مع قاعدة البيانات - محسنة للسرعة
     إرجاع إحصائيات المزامنة
     """
     try:
@@ -836,73 +836,95 @@ def sync_employees_batch(employees_data: list) -> dict:
             "created": 0,
             "updated": 0,
             "errors": 0,
-            "processed": 0
+            "processed": 0,
+            "skipped": 0
         }
         
-        print(f"🔄 بدء مزامنة {len(employees_data)} موظف...")
+        print(f"🔄 بدء مزامنة محسنة لـ {len(employees_data)} موظف...")
         
-        for i, employee in enumerate(employees_data):
-            try:
-                employee_id = employee.get('EmployeeID')
-                name = employee.get('Name')
-                department = employee.get('Department', 'غير محدد')
-                
-                if not employee_id or not name:
-                    stats["errors"] += 1
-                    continue
-                
-                # البحث عن الموظف الموجود
-                employees_ref = db.collection('employees')
-                query = employees_ref.where('employee_id', '==', employee_id).limit(1)
-                existing = list(query.stream())
-                
-                if existing:
-                    # تحديث الموظف الموجود
-                    doc_ref = existing[0].reference
-                    existing_data = existing[0].to_dict()
+        # جلب جميع الموظفين الموجودين مرة واحدة للمقارنة السريعة
+        employees_ref = db.collection('employees')
+        existing_employees = {}
+        
+        try:
+            print("📋 جلب الموظفين الموجودين...")
+            for doc in employees_ref.stream():
+                data = doc.to_dict()
+                if 'employee_id' in data:
+                    existing_employees[data['employee_id']] = {
+                        'doc_ref': doc.reference,
+                        'data': data
+                    }
+            print(f"📊 تم جلب {len(existing_employees)} موظف موجود")
+        except Exception as e:
+            print(f"⚠️ خطأ في جلب الموظفين الموجودين: {e}")
+            # المتابعة بدون التحسين
+        
+        # معالجة الموظفين
+        batch_size = 10  # معالجة دفعية
+        for i in range(0, len(employees_data), batch_size):
+            batch = employees_data[i:i + batch_size]
+            
+            for employee in batch:
+                try:
+                    employee_id = employee.get('EmployeeID')
+                    name = employee.get('Name')
+                    department = employee.get('Department', 'غير محدد')
                     
-                    # تحديث فقط إذا تغيرت البيانات
-                    if existing_data.get('name') != name or existing_data.get('department') != department:
-                        doc_ref.update({
+                    if not employee_id or not name:
+                        stats["errors"] += 1
+                        continue
+                    
+                    # البحث السريع في البيانات المحملة
+                    if employee_id in existing_employees:
+                        # موظف موجود - تحقق من التحديث
+                        existing_data = existing_employees[employee_id]['data']
+                        
+                        if existing_data.get('name') != name or existing_data.get('department') != department:
+                            # تحديث مطلوب
+                            doc_ref = existing_employees[employee_id]['doc_ref']
+                            doc_ref.update({
+                                'name': name,
+                                'department': department,
+                                'updated_at': datetime.utcnow(),
+                                'synced_from_attendance': True
+                            })
+                            stats["updated"] += 1
+                            if stats["updated"] <= 5:  # طباعة أول 5 تحديثات فقط
+                                print(f"✅ تم تحديث الموظف: {employee_id} - {name}")
+                        else:
+                            stats["skipped"] += 1
+                    else:
+                        # موظف جديد
+                        employee_data = {
+                            'employee_id': employee_id,
                             'name': name,
                             'department': department,
+                            'email': None,
+                            'phone': None,
+                            'start_date': None,
+                            'status': 'active',
+                            'created_at': datetime.utcnow(),
                             'updated_at': datetime.utcnow(),
                             'synced_from_attendance': True
-                        })
-                        stats["updated"] += 1
-                        print(f"✅ تم تحديث الموظف: {employee_id} - {name}")
+                        }
+                        
+                        db.collection('employees').add(employee_data)
+                        stats["created"] += 1
+                        if stats["created"] <= 5:  # طباعة أول 5 إنشاءات فقط
+                            print(f"✅ تم إنشاء موظف جديد: {employee_id} - {name}")
                     
-                else:
-                    # إنشاء موظف جديد
-                    employee_data = {
-                        'employee_id': employee_id,
-                        'name': name,
-                        'department': department,
-                        'email': None,
-                        'phone': None,
-                        'start_date': None,
-                        'status': 'active',
-                        'created_at': datetime.utcnow(),
-                        'updated_at': datetime.utcnow(),
-                        'synced_from_attendance': True
-                    }
+                    stats["processed"] += 1
                     
-                    db.collection('employees').add(employee_data)
-                    stats["created"] += 1
-                    print(f"✅ تم إنشاء موظف جديد: {employee_id} - {name}")
-                
-                stats["processed"] += 1
-                
-                # تقرير التقدم كل 10 موظفين
-                if (i + 1) % 10 == 0:
-                    progress = ((i + 1) / len(employees_data)) * 100
-                    print(f"📊 التقدم: {progress:.1f}% ({i + 1}/{len(employees_data)})")
-                
-            except Exception as emp_error:
-                print(f"❌ خطأ في معالجة الموظف {employee.get('EmployeeID', 'غير معروف')}: {emp_error}")
-                stats["errors"] += 1
+                except Exception as emp_error:
+                    print(f"❌ خطأ في معالجة الموظف {employee.get('EmployeeID', 'غير معروف')}: {emp_error}")
+                    stats["errors"] += 1
+            
+            # تقرير التقدم كل دفعة
+            progress = ((i + len(batch)) / len(employees_data)) * 100
+            print(f"📊 التقدم: {progress:.1f}% ({i + len(batch)}/{len(employees_data)})")
         
-        print(f"✅ انتهت المزامنة - إنشاء: {stats['created']}, تحديث: {stats['updated']}, أخطاء: {stats['errors']}")
+        print(f"✅ انتهت المزامنة - إنشاء: {stats['created']}, تحديث: {stats['updated']}, تخطي: {stats['skipped']}, أخطاء: {stats['errors']}")
         return stats
         
     except Exception as e:

@@ -12,7 +12,7 @@ EMPLOYEE_MARKER = "Employee ID:"
 
 def extract_employees_from_file(file_path: str) -> List[Dict[str, str]]:
     """
-    استخراج بيانات الموظفين من ملف Excel بدون معالجة الحضور
+    استخراج بيانات الموظفين من ملف Excel بدون معالجة الحضور - محسن للسرعة
     يُستخدم للمزامنة السريعة مع قاعدة البيانات
     """
     try:
@@ -22,25 +22,35 @@ def extract_employees_from_file(file_path: str) -> List[Dict[str, str]]:
         ws = wb.worksheets[0]  # استخدام الورقة الأولى
         
         employees = []
-        current_row = 1
-        max_rows = ws.max_row
+        employees_found = 0
+        max_rows = min(ws.max_row, 2000)  # تحديد الحد الأقصى لتجنب الملفات الكبيرة جداً
         
-        print(f"📊 فحص {max_rows} صف للبحث عن الموظفين...")
+        print(f"📊 فحص سريع للموظفين في {max_rows} صف...")
         
-        while current_row <= max_rows:
-            cell_value = ws.cell(row=current_row, column=1).value
+        # استخدام iter_rows للحصول على أداء أفضل
+        for row_num, row in enumerate(ws.iter_rows(min_row=1, max_row=max_rows, min_col=1, max_col=1, values_only=True), 1):
+            cell_value = row[0]
             
             if cell_value and EMPLOYEE_MARKER in str(cell_value):
                 # استخراج بيانات الموظف
                 employee_data = parse_employee_line(str(cell_value))
                 if employee_data:
                     employees.append(employee_data)
-                    print(f"👤 موظف #{len(employees)}: {employee_data['EmployeeID']} - {employee_data['Name']}")
+                    employees_found += 1
+                    
+                    # طباعة التقدم كل 10 موظفين لتجنب الإفراط في الطباعة
+                    if employees_found % 10 == 0:
+                        print(f"👥 تم العثور على {employees_found} موظف...")
+                    elif employees_found <= 5:  # طباعة أول 5 موظفين فقط
+                        print(f"👤 موظف #{employees_found}: {employee_data['EmployeeID']} - {employee_data['Name']}")
             
-            current_row += 1
+            # إيقاف مبكر إذا وجدنا عدد كبير من الموظفين (تحسين الأداء)
+            if employees_found >= 100:  # حد أقصى معقول للموظفين
+                print(f"⚡ تم الوصول للحد الأقصى ({employees_found} موظف) - إيقاف البحث")
+                break
         
         wb.close()
-        print(f"✅ تم استخراج {len(employees)} موظف")
+        print(f"✅ تم استخراج {len(employees)} موظف بنجاح")
         return employees
         
     except Exception as e:

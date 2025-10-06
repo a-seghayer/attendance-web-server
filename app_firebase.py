@@ -1066,6 +1066,14 @@ def sync_employees_from_file():
         try:
             print(f"📋 معلومات الطلب: Content-Length: {request.content_length}")
             
+            # التحقق من حجم الملف لتجنب المعالجة المفرطة
+            file_size_mb = request.content_length / (1024 * 1024) if request.content_length else 0
+            if file_size_mb > 50:  # ملفات أكبر من 50 ميجابايت
+                return jsonify({
+                    "error": f"الملف كبير جداً ({file_size_mb:.1f} MB). الحد الأقصى المسموح: 50 MB",
+                    "suggestion": "يرجى تقسيم الملف أو استخدام ملف أصغر"
+                }), 400
+            
             # استخراج بيانات الموظفين فقط
             from attendance_processor import extract_employees_from_file
             employees_data = extract_employees_from_file(temp_file_path)
@@ -1074,6 +1082,14 @@ def sync_employees_from_file():
                 return jsonify({"error": "لم يتم العثور على بيانات موظفين في الملف"}), 400
             
             print(f"👥 تم العثور على {len(employees_data)} موظف في الملف")
+            
+            # تحديد ما إذا كان يجب المزامنة بناءً على عدد الموظفين
+            if len(employees_data) > 100:
+                return jsonify({
+                    "warning": f"عدد الموظفين كبير ({len(employees_data)}). يُنصح بالمزامنة اليدوية",
+                    "employees_count": len(employees_data),
+                    "suggestion": "استخدم خيار 'تعطيل المزامنة التلقائية' لتجنب التأخير"
+                }), 202
             
             # مزامنة الموظفين مع قاعدة البيانات
             from firebase_config import sync_employees_batch
