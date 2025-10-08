@@ -1518,6 +1518,73 @@ def delete_employee(current_user, employee_id):
         print(f"خطأ في حذف الموظف: {e}")
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/employees/bulk-delete", methods=["POST"])
+@token_required
+def bulk_delete_employees(current_user):
+    """حذف متعدد للموظفين"""
+    try:
+        from firebase_config import db
+        
+        data = request.get_json()
+        employee_ids = data.get('employee_ids', [])
+        
+        if not employee_ids:
+            return jsonify({"error": "لم يتم تحديد موظفين للحذف"}), 400
+        
+        if len(employee_ids) > 100:
+            return jsonify({"error": "لا يمكن حذف أكثر من 100 موظف في المرة الواحدة"}), 400
+        
+        print(f"🗑️ طلب حذف متعدد من {current_user}: {len(employee_ids)} موظف")
+        
+        # استخدام batch للحذف المتعدد (أكثر كفاءة)
+        batch = db.batch()
+        deleted_count = 0
+        errors = []
+        
+        for employee_id in employee_ids:
+            try:
+                emp_ref = db.collection('employees').document(employee_id)
+                
+                # التحقق من وجود الموظف قبل الحذف
+                emp_doc = emp_ref.get()
+                if emp_doc.exists:
+                    batch.delete(emp_ref)
+                    deleted_count += 1
+                    print(f"✅ تم تحضير حذف الموظف: {employee_id}")
+                else:
+                    errors.append(f"الموظف {employee_id} غير موجود")
+                    print(f"⚠️ الموظف {employee_id} غير موجود")
+                    
+            except Exception as e:
+                error_msg = f"خطأ في تحضير حذف الموظف {employee_id}: {str(e)}"
+                errors.append(error_msg)
+                print(f"❌ {error_msg}")
+        
+        # تنفيذ الحذف المتعدد
+        if deleted_count > 0:
+            batch.commit()
+            print(f"✅ تم حذف {deleted_count} موظف بنجاح")
+        
+        result = {
+            "success": True,
+            "deleted_count": deleted_count,
+            "total_requested": len(employee_ids),
+            "errors": errors
+        }
+        
+        if errors:
+            result["message"] = f"تم حذف {deleted_count} موظف مع {len(errors)} خطأ"
+        else:
+            result["message"] = f"تم حذف {deleted_count} موظف بنجاح"
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        print(f"❌ خطأ في الحذف المتعدد: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"خطأ في الخادم: {str(e)}"}), 500
+
 @app.route("/api/employees/<employee_id>/toggle", methods=["POST"])
 @token_required
 def toggle_employee_status(current_user, employee_id):
