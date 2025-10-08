@@ -780,22 +780,9 @@ def sync_employee_from_attendance(employee_id, name, department):
         existing_docs = list(existing_query.stream())
         
         if existing_docs:
-            # تحديث البيانات الموجودة
-            doc_ref = existing_docs[0].reference
-            current_data = existing_docs[0].to_dict()
-            
-            # تحديث الاسم والقسم إذا تغيرا
-            updates = {}
-            if current_data.get('name') != name:
-                updates['name'] = name
-            if current_data.get('department') != department:
-                updates['department'] = department
-                
-            if updates:
-                updates['updated_at'] = datetime.utcnow()
-                updates['synced_from_attendance'] = True
-                doc_ref.update(updates)
-                print(f"✅ تم تحديث الموظف من ملف الحضور: {employee_id} - {name}")
+            # الموظف موجود - لا نقوم بتحديثه (الأولوية لبيانات إدارة الموظفين)
+            print(f"⏭️ تجاهل الموظف الموجود: {employee_id} - {name} (الأولوية لإدارة الموظفين)")
+            return True  # نعتبرها عملية ناجحة لكن بدون تحديث
             
         else:
             # إنشاء موظف جديد

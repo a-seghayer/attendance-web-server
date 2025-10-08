@@ -1246,9 +1246,10 @@ def process_attendance():
                 print("⚠️ لم يتم العثور على نتائج - المعالجة فشلت")
                 return jsonify({"error": "لم يتم العثور على بيانات صالحة في الملف"}), 400
             
-            # مزامنة بيانات الموظفين مع قاعدة البيانات
-            print("🔄 بدء مزامنة بيانات الموظفين...")
-            synced_employees = 0
+            # مزامنة بيانات الموظفين مع قاعدة البيانات (إضافة الجدد فقط)
+            print("🔄 بدء إضافة الموظفين الجدد فقط (الأولوية لإدارة الموظفين)...")
+            new_employees_added = 0
+            existing_employees_skipped = 0
             try:
                 from firebase_config import sync_employee_from_attendance
                 
@@ -1258,10 +1259,19 @@ def process_attendance():
                     department = employee_data.get('Department', '')
                     
                     if employee_id and name and department:
-                        if sync_employee_from_attendance(employee_id, name, department):
-                            synced_employees += 1
+                        # التحقق من وجود الموظف أولاً
+                        from firebase_config import db
+                        existing_query = db.collection('employees').where('employee_id', '==', employee_id).limit(1)
+                        existing_docs = list(existing_query.stream())
+                        
+                        if existing_docs:
+                            existing_employees_skipped += 1
+                        else:
+                            if sync_employee_from_attendance(employee_id, name, department):
+                                new_employees_added += 1
                 
-                print(f"✅ تم مزامنة {synced_employees} موظف مع قاعدة البيانات")
+                print(f"✅ تم إضافة {new_employees_added} موظف جديد")
+                print(f"⏭️ تم تجاهل {existing_employees_skipped} موظف موجود (الأولوية لإدارة الموظفين)")
                 
             except Exception as sync_error:
                 print(f"⚠️ خطأ في مزامنة الموظفين: {sync_error}")
