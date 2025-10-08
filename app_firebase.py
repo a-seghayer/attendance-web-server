@@ -1755,6 +1755,135 @@ def get_departments(current_user):
         print(f"❌ خطأ في جلب الأقسام: {str(e)}")
         return jsonify({"error": "خطأ في جلب الأقسام"}), 500
 
+
+@app.route("/api/employees/upload-excel", methods=["POST"])
+@token_required
+def upload_employees_excel(current_user):
+    """رفع ومعالجة ملف Excel لإضافة/تحديث الموظفين"""
+    try:
+        from firebase_config import db, update_employee, create_employee_record
+        import openpyxl
+        
+        print(f"📤 استقبال طلب رفع ملف Excel للموظفين من {current_user}")
+        
+        # Check if file exists in request
+        if 'file' not in request.files:
+            return jsonify({"error": "لم يتم إرفاق ملف"}), 400
+        
+        file = request.files['file']
+        
+        if file.filename == '':
+            return jsonify({"error": "لم يتم اختيار ملف"}), 400
+        
+        if not file.filename.endswith(('.xlsx', '.xls')):
+            return jsonify({"error": "يجب أن يكون الملف بصيغة Excel (.xlsx أو .xls)"}), 400
+        
+        # Read Excel file
+        wb = openpyxl.load_workbook(file)
+        ws = wb.active
+        
+        # Get headers from first row
+        headers_row = [cell.value for cell in ws[1]]
+        
+        # Expected headers mapping (Arabic to English field names)
+        field_mapping = {
+            'رقم الموظف': 'employee_id',
+            'الاسم': 'name',
+            'المسمى الوظيفي': 'job_title',
+            'الإدارة': 'department',
+            'المدينة': 'city',
+            'الدولة': 'country',
+            'البريد الإلكتروني': 'email',
+            'الهاتف': 'phone',
+            'تاريخ البداية': 'start_date'
+        }
+        
+        # Find column indices
+        col_indices = {}
+        for idx, header in enumerate(headers_row):
+            if header and header in field_mapping:
+                col_indices[field_mapping[header]] = idx
+        
+        print(f"📊 الأعمدة المتاحة: {list(col_indices.keys())}")
+        
+        # Validate required fields
+        required_fields = ['employee_id', 'name']
+        missing_fields = [f for f in required_fields if f not in col_indices]
+        
+        if missing_fields:
+            missing_ar = [k for k, v in field_mapping.items() if v in missing_fields]
+            return jsonify({"error": f"الأعمدة المطلوبة غير موجودة: {', '.join(missing_ar)}"}), 400
+        
+        # Process rows
+        added = 0
+        updated = 0
+        skipped = 0
+        errors = []
+        
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            try:
+                # Extract data based on column indices
+                emp_data = {}
+                
+                for field, col_idx in col_indices.items():
+                    value = row[col_idx] if col_idx < len(row) else None
+                    if value is not None and value != '':
+                        emp_data[field] = str(value).strip()
+                
+                # Skip empty rows
+                if not emp_data.get('employee_id') or not emp_data.get('name'):
+                    skipped += 1
+                    continue
+                
+                employee_id = emp_data['employee_id']
+                
+                # Check if employee exists
+                emp_ref = db.collection('employees').document(employee_id)
+                existing_emp = emp_ref.get()
+                
+                if existing_emp.exists:
+                    # Update existing employee
+                    update_data = {k: v for k, v in emp_data.items() if k != 'employee_id'}
+                    update_data['updated_at'] = datetime.now().isoformat()
+                    emp_ref.update(update_data)
+                    updated += 1
+                    print(f"✅ تم تحديث الموظف: {employee_id} - {emp_data.get('name')}")
+                else:
+                    # Create new employee
+                    emp_data['id'] = employee_id
+                    emp_data['active'] = True
+                    emp_data['created_at'] = datetime.now().isoformat()
+                    emp_data['updated_at'] = datetime.now().isoformat()
+                    emp_ref.set(emp_data)
+                    added += 1
+                    print(f"➕ تم إضافة موظف جديد: {employee_id} - {emp_data.get('name')}")
+                    
+            except Exception as row_error:
+                error_msg = f"صف {row_idx}: {str(row_error)}"
+                errors.append(error_msg)
+                print(f"❌ {error_msg}")
+                continue
+        
+        result = {
+            "success": True,
+            "added": added,
+            "updated": updated,
+            "skipped": skipped,
+            "total": added + updated,
+            "errors": errors
+        }
+        
+        print(f"✅ اكتمل رفع الملف: {added} إضافة، {updated} تحديث، {skipped} تجاهل")
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        print(f"❌ خطأ في رفع ملف Excel: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"خطأ في معالجة الملف: {str(e)}"}), 500
+
+
 # === نقاط النهاية العامة ===
 
 @app.route("/api/health", methods=["GET"])
