@@ -1518,15 +1518,104 @@ def delete_employee(current_user, employee_id):
         print(f"خطأ في حذف الموظف: {e}")
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/employees/cleanup-duplicates", methods=["POST"])
+@token_required
+def cleanup_duplicate_employees(current_user):
+    """تنظيف الموظفين المكررين - الاحتفاظ بالأحدث"""
+    try:
+        print(f"🧹 بدء تنظيف الموظفين المكررين بواسطة {current_user}")
+        
+        from firebase_config import db
+        
+        # جلب جميع الموظفين
+        employees_ref = db.collection('employees')
+        docs = employees_ref.stream()
+        
+        # تجميع الموظفين حسب employee_id
+        employees_by_id = {}
+        for doc in docs:
+            doc_data = doc.to_dict()
+            emp_id = doc_data.get('employee_id') or doc_data.get('id') or doc.id
+            
+            if emp_id not in employees_by_id:
+                employees_by_id[emp_id] = []
+            
+            employees_by_id[emp_id].append({
+                'doc_id': doc.id,
+                'data': doc_data,
+                'updated_at': doc_data.get('updated_at', ''),
+                'created_at': doc_data.get('created_at', '')
+            })
+        
+        # البحث عن المكررات
+        duplicates_found = 0
+        duplicates_removed = 0
+        batch = db.batch()
+        batch_operations = 0
+        
+        for emp_id, employee_docs in employees_by_id.items():
+            if len(employee_docs) > 1:
+                duplicates_found += len(employee_docs) - 1
+                print(f"🔍 وجد {len(employee_docs)} نسخ للموظف {emp_id}")
+                
+                # ترتيب حسب تاريخ التحديث (الأحدث أولاً)
+                employee_docs.sort(key=lambda x: x.get('updated_at', ''), reverse=True)
+                
+                # الاحتفاظ بالأول (الأحدث) وحذف الباقي
+                keep_doc = employee_docs[0]
+                print(f"  ✅ الاحتفاظ بـ: {keep_doc['doc_id']} (آخر تحديث: {keep_doc.get('updated_at', 'غير محدد')})")
+                
+                for duplicate_doc in employee_docs[1:]:
+                    doc_ref = db.collection('employees').document(duplicate_doc['doc_id'])
+                    batch.delete(doc_ref)
+                    batch_operations += 1
+                    duplicates_removed += 1
+                    print(f"  🗑️ حذف المكرر: {duplicate_doc['doc_id']}")
+                    
+                    # تنفيذ batch كل 100 عملية
+                    if batch_operations >= 100:
+                        print(f"💾 حفظ دفعة من {batch_operations} عملية حذف...")
+                        batch.commit()
+                        batch = db.batch()
+                        batch_operations = 0
+        
+        # تنفيذ آخر batch
+        if batch_operations > 0:
+            print(f"💾 حفظ الدفعة الأخيرة ({batch_operations} عملية)...")
+            batch.commit()
+        
+        result = {
+            "success": True,
+            "duplicates_found": duplicates_found,
+            "duplicates_removed": duplicates_removed,
+            "message": f"تم تنظيف {duplicates_removed} موظف مكرر من أصل {duplicates_found} مكرر موجود"
+        }
+        
+        print(f"✅ اكتمل تنظيف المكررات: {duplicates_removed} حذف")
+        return jsonify(result)
+        
+    except Exception as e:
+        print(f"❌ خطأ في تنظيف المكررات: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"خطأ في تنظيف المكررات: {str(e)}"}), 500
+
 @app.route("/api/employees/bulk-delete", methods=["POST"])
 @token_required
 def bulk_delete_employees(current_user):
     """حذف متعدد للموظفين"""
     try:
+        print(f"🗑️ استقبال طلب حذف متعدد من {current_user}")
+        
         from firebase_config import db
         
         data = request.get_json()
+        if not data:
+            print("❌ لم يتم استقبال بيانات JSON")
+            return jsonify({"error": "لم يتم إرسال بيانات"}), 400
+            
         employee_ids = data.get('employee_ids', [])
+        print(f"📋 الموظفين المطلوب حذفهم: {employee_ids}")
         
         if not employee_ids:
             return jsonify({"error": "لم يتم تحديد موظفين للحذف"}), 400
@@ -1891,12 +1980,20 @@ def upload_employees_excel(current_user):
         # SMART OPTIMIZATION: Fetch all existing employee IDs once (single query)
         print(f"🔍 جلب قائمة الموظفين الموجودين...")
         existing_employee_ids = set()
+        existing_employees_data = {}  # للمقارنة مع البيانات الجديدة
         try:
-            # Get all employee document IDs in one query (much faster than individual gets)
+            # Get all employees with their employee_id field (not document ID)
             employees_ref = db.collection('employees')
             docs = employees_ref.stream()
             for doc in docs:
-                existing_employee_ids.add(doc.id)
+                doc_data = doc.to_dict()
+                emp_id = doc_data.get('employee_id') or doc_data.get('id') or doc.id
+                if emp_id:
+                    existing_employee_ids.add(emp_id)
+                    existing_employees_data[emp_id] = {
+                        'doc_id': doc.id,  # معرف الوثيقة للتحديث
+                        'data': doc_data   # البيانات الحالية للمقارنة
+                    }
             print(f"✅ تم جلب {len(existing_employee_ids)} موظف موجود")
         except Exception as e:
             print(f"⚠️ خطأ في جلب الموظفين الموجودين: {e}")
@@ -1950,19 +2047,45 @@ def upload_employees_excel(current_user):
                         emp_data[field] = str(value).strip()
                 
                 employee_id = emp_data['employee_id']
-                emp_ref = db.collection('employees').document(employee_id)
                 
                 # Check against in-memory set (instant - no network call!)
                 if employee_id in existing_employee_ids:
-                    # Update existing employee using batch
-                    update_data = {k: v for k, v in emp_data.items() if k != 'employee_id'}
-                    update_data['updated_at'] = datetime.now().isoformat()
+                    # Get existing employee data for comparison
+                    existing_emp = existing_employees_data[employee_id]
+                    existing_data = existing_emp['data']
+                    doc_id = existing_emp['doc_id']
                     
-                    # Add to batch
-                    batch.update(emp_ref, update_data)
-                    batch_operations += 1
-                    updated += 1
-                    print(f"✅ تحديث: {employee_id} - {emp_data.get('name')}")
+                    # Compare data to see if update is needed
+                    needs_update = False
+                    update_data = {}
+                    
+                    # Compare each field
+                    for field, new_value in emp_data.items():
+                        if field == 'employee_id':
+                            continue  # Skip employee_id
+                        
+                        old_value = existing_data.get(field, '')
+                        if str(old_value).strip() != str(new_value).strip():
+                            update_data[field] = new_value
+                            needs_update = True
+                    
+                    if needs_update:
+                        # Use the correct document ID for update
+                        emp_ref = db.collection('employees').document(doc_id)
+                        update_data['updated_at'] = datetime.now().isoformat()
+                        
+                        # Add to batch
+                        batch.update(emp_ref, update_data)
+                        batch_operations += 1
+                        updated += 1
+                        
+                        # Show what changed
+                        changed_fields = list(update_data.keys())
+                        changed_fields.remove('updated_at')
+                        print(f"✅ تحديث: {employee_id} - {emp_data.get('name')} (تغيير: {', '.join(changed_fields)})")
+                    else:
+                        skipped += 1
+                        print(f"⏭️ تجاهل: {employee_id} - {emp_data.get('name')} (لا توجد تغييرات)")
                 else:
                     # Create new employee using batch
                     emp_data['id'] = employee_id
@@ -1970,6 +2093,9 @@ def upload_employees_excel(current_user):
                     emp_data['created_at'] = datetime.now().isoformat()
                     emp_data['updated_at'] = datetime.now().isoformat()
                     emp_data['status'] = 'active'
+                    
+                    # Use employee_id as document ID to prevent duplicates
+                    emp_ref = db.collection('employees').document(employee_id)
                     
                     # Add to batch
                     batch.set(emp_ref, emp_data)
@@ -1979,6 +2105,10 @@ def upload_employees_excel(current_user):
                     
                     # Add to set for subsequent checks in same upload
                     existing_employee_ids.add(employee_id)
+                    existing_employees_data[employee_id] = {
+                        'doc_id': employee_id,
+                        'data': emp_data
+                    }
                 
                 processed += 1
                 
