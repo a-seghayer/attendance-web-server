@@ -1814,63 +1814,103 @@ def upload_employees_excel(current_user):
             missing_ar = [k for k, v in field_mapping.items() if v in missing_fields]
             return jsonify({"error": f"الأعمدة المطلوبة غير موجودة: {', '.join(missing_ar)}"}), 400
         
-        # Process rows
+        # Process rows in batches for better performance
         added = 0
         updated = 0
         skipped = 0
         errors = []
+        batch_size = 25  # Smaller batches to prevent timeout
         
+        # Get all rows first and filter out empty ones
+        all_rows = []
         for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-            try:
-                # Extract data based on column indices
-                emp_data = {}
-                
-                for field, col_idx in col_indices.items():
-                    value = row[col_idx] if col_idx < len(row) else None
-                    if value is not None and value != '':
-                        emp_data[field] = str(value).strip()
-                
-                # Skip empty rows
-                if not emp_data.get('employee_id') or not emp_data.get('name'):
-                    skipped += 1
-                    continue
-                
-                employee_id = emp_data['employee_id']
-                
-                # Check if employee exists
-                emp_ref = db.collection('employees').document(employee_id)
-                existing_emp = emp_ref.get()
-                
-                if existing_emp.exists:
-                    # Update existing employee
-                    update_data = {k: v for k, v in emp_data.items() if k != 'employee_id'}
-                    update_data['updated_at'] = datetime.now().isoformat()
-                    
-                    # Use the update_employee function
-                    if update_employee(employee_id, update_data):
-                        updated += 1
-                        print(f"✅ تم تحديث الموظف: {employee_id} - {emp_data.get('name')}")
+            # Extract employee_id first to check if row is valid
+            employee_id_col = col_indices.get('employee_id')
+            if employee_id_col is not None and employee_id_col < len(row):
+                employee_id = row[employee_id_col]
+                # Check if employee_id is not None, not empty, and not just whitespace
+                if employee_id is not None and str(employee_id).strip() and str(employee_id).strip() != 'None':
+                    # Also check if name exists
+                    name_col = col_indices.get('name')
+                    if name_col is not None and name_col < len(row):
+                        name = row[name_col]
+                        if name is not None and str(name).strip() and str(name).strip() != 'None':
+                            all_rows.append((row_idx, row))
+                        else:
+                            skipped += 1
                     else:
-                        print(f"❌ فشل في تحديث الموظف: {employee_id}")
+                        skipped += 1
                 else:
-                    # Create new employee
-                    emp_data['id'] = employee_id
-                    emp_data['active'] = True
-                    emp_data['created_at'] = datetime.now().isoformat()
-                    emp_data['updated_at'] = datetime.now().isoformat()
+                    skipped += 1
+            else:
+                skipped += 1
+        
+        total_valid_rows = len(all_rows)
+        print(f"📊 بدء معالجة {total_valid_rows} صف صالح من أصل {ws.max_row - 1} صف")
+        
+        # Process in batches
+        for batch_start in range(0, total_valid_rows, batch_size):
+            batch_end = min(batch_start + batch_size, total_valid_rows)
+            batch_rows = all_rows[batch_start:batch_end]
+            
+            print(f"🔄 معالجة الدفعة {batch_start//batch_size + 1}: الصفوف {batch_start + 1}-{batch_end}")
+            
+            for row_idx, row in batch_rows:
+                try:
+                    # Extract data based on column indices
+                    emp_data = {}
                     
-                    # Use the create_employee function
-                    if create_employee(emp_data):
-                        added += 1
-                        print(f"➕ تم إضافة موظف جديد: {employee_id} - {emp_data.get('name')}")
+                    for field, col_idx in col_indices.items():
+                        value = row[col_idx] if col_idx < len(row) else None
+                        if value is not None and value != '':
+                            emp_data[field] = str(value).strip()
+                    
+                    # Double check - should not happen since we pre-filtered
+                    if not emp_data.get('employee_id') or not emp_data.get('name'):
+                        skipped += 1
+                        continue
+                
+                    employee_id = emp_data['employee_id']
+                    
+                    # Check if employee exists
+                    emp_ref = db.collection('employees').document(employee_id)
+                    existing_emp = emp_ref.get()
+                    
+                    if existing_emp.exists:
+                        # Update existing employee
+                        update_data = {k: v for k, v in emp_data.items() if k != 'employee_id'}
+                        update_data['updated_at'] = datetime.now().isoformat()
+                        
+                        # Use the update_employee function
+                        if update_employee(employee_id, update_data):
+                            updated += 1
+                            print(f"✅ تم تحديث الموظف: {employee_id} - {emp_data.get('name')}")
+                        else:
+                            print(f"❌ فشل في تحديث الموظف: {employee_id}")
                     else:
-                        print(f"❌ فشل في إضافة الموظف: {employee_id}")
-                    
-            except Exception as row_error:
-                error_msg = f"صف {row_idx}: {str(row_error)}"
-                errors.append(error_msg)
-                print(f"❌ {error_msg}")
-                continue
+                        # Create new employee
+                        emp_data['id'] = employee_id
+                        emp_data['active'] = True
+                        emp_data['created_at'] = datetime.now().isoformat()
+                        emp_data['updated_at'] = datetime.now().isoformat()
+                        
+                        # Use the create_employee function
+                        if create_employee(emp_data):
+                            added += 1
+                            print(f"➕ تم إضافة موظف جديد: {employee_id} - {emp_data.get('name')}")
+                        else:
+                            print(f"❌ فشل في إضافة الموظف: {employee_id}")
+                        
+                except Exception as row_error:
+                    error_msg = f"صف {row_idx}: {str(row_error)}"
+                    errors.append(error_msg)
+                    print(f"❌ {error_msg}")
+                    continue
+            
+            # Add small delay between batches to prevent timeout
+            if batch_start + batch_size < total_valid_rows:
+                import time
+                time.sleep(0.2)  # 200ms delay between batches
         
         result = {
             "success": True,
@@ -1878,10 +1918,11 @@ def upload_employees_excel(current_user):
             "updated": updated,
             "skipped": skipped,
             "total": added + updated,
-            "errors": errors
+            "errors": errors,
+            "total_processed": total_valid_rows
         }
         
-        print(f"✅ اكتمل رفع الملف: {added} إضافة، {updated} تحديث، {skipped} تجاهل")
+        print(f"✅ اكتمل رفع الملف: {added} إضافة، {updated} تحديث، {skipped} تجاهل من أصل {total_valid_rows} صف صالح")
         
         return jsonify(result)
         
