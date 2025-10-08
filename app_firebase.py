@@ -7,8 +7,28 @@ from datetime import datetime, timedelta
 from functools import wraps
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-from flask_compress import Compress
-from flask_caching import Cache
+# Optional deps: Flask-Compress and Flask-Caching
+try:
+    from flask_compress import Compress  # type: ignore
+except Exception:
+    class Compress:  # no-op fallback
+        def __init__(self, *args, **kwargs):
+            pass
+        def init_app(self, *args, **kwargs):
+            pass
+try:
+    from flask_caching import Cache  # type: ignore
+except Exception:
+    # Minimal no-op cache with get/set interface
+    class _NoopCache:
+        def __init__(self, *args, **kwargs):
+            pass
+        def get(self, key):
+            return None
+        def set(self, key, value, timeout=None):
+            return True
+    def Cache(*args, **kwargs):
+        return _NoopCache()
 from werkzeug.security import check_password_hash, generate_password_hash
 try:
     from google.api_core.exceptions import ResourceExhausted
@@ -177,14 +197,20 @@ CORS(app)  # Allow static site to call the API
 app.config['JSON_AS_ASCII'] = False
 app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False  # reduce CPU/bytes in prod
 
-# Enable gzip/deflate compression for JSON and static responses
-Compress(app)
+# Enable gzip/deflate compression for JSON and static responses (no-op if missing)
+try:
+    Compress(app)
+except Exception:
+    pass
 
-# Lightweight in-process cache (swap to Redis in prod if needed)
-cache = Cache(app, config={
-    "CACHE_TYPE": "SimpleCache",
-    "CACHE_DEFAULT_TIMEOUT": 30
-})
+# Lightweight in-process cache (no-op if flask_caching not installed)
+try:
+    cache = Cache(app, config={
+        "CACHE_TYPE": "SimpleCache",
+        "CACHE_DEFAULT_TIMEOUT": 30
+    })
+except Exception:
+    cache = Cache()
 
 # Configure file upload limits
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max file size
