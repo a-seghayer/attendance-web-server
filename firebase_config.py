@@ -659,7 +659,7 @@ def get_all_employees():
         return []
 
 def create_employee(employee_data):
-    """إنشاء موظف جديد"""
+    """إنشاء موظف جديد - Note: Caller should check for duplicates first"""
     try:
         if not db:
             print("❌ قاعدة البيانات غير متاحة")
@@ -672,16 +672,16 @@ def create_employee(employee_data):
             'status': 'active'
         })
         
-        # التحقق من عدم وجود موظف بنفس الرقم
-        existing = db.collection('employees').where('employee_id', '==', employee_data['employee_id']).limit(1).stream()
-        if list(existing):
-            raise Exception(f"موظف برقم {employee_data['employee_id']} موجود بالفعل")
+        # إنشاء الموظف - استخدام set بدلاً من add للكفاءة
+        # Note: Duplicate check removed for performance - caller must verify first
+        employee_id = employee_data.get('employee_id') or employee_data.get('id')
+        if not employee_id:
+            raise Exception("employee_id is required")
+            
+        doc_ref = db.collection('employees').document(employee_id)
+        doc_ref.set(employee_data)
         
-        # إنشاء الموظف
-        doc_ref = db.collection('employees').add(employee_data)
-        employee_id = doc_ref[1].id
-        
-        print(f"✅ تم إنشاء الموظف: {employee_data['name']} ({employee_data['employee_id']})")
+        print(f"✅ تم إنشاء الموظف: {employee_data.get('name', 'Unknown')} ({employee_id})")
         return employee_id
         
     except Exception as e:

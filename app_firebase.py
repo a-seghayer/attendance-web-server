@@ -1438,6 +1438,8 @@ def get_employees(current_user):
 def create_employee(current_user):
     """إنشاء موظف جديد"""
     try:
+        from firebase_config import db, create_employee as create_emp
+        
         data = request.get_json()
         
         # التحقق من البيانات المطلوبة
@@ -1446,12 +1448,17 @@ def create_employee(current_user):
             if not data.get(field):
                 return jsonify({"error": f"الحقل {field} مطلوب"}), 400
         
-        from firebase_config import create_employee as create_emp
-        employee_id = create_emp(data)
+        # التحقق من عدم وجود موظف بنفس الرقم
+        employee_id = data['employee_id']
+        emp_ref = db.collection('employees').document(employee_id)
+        if emp_ref.get().exists:
+            return jsonify({"error": f"موظف برقم {employee_id} موجود بالفعل"}), 400
+        
+        created_id = create_emp(data)
         
         return jsonify({
             "message": "تم إنشاء الموظف بنجاح",
-            "id": employee_id
+            "id": created_id
         }), 201
         
     except Exception as e:
@@ -1778,8 +1785,8 @@ def upload_employees_excel(current_user):
         if not file.filename.endswith(('.xlsx', '.xls')):
             return jsonify({"error": "يجب أن يكون الملف بصيغة Excel (.xlsx أو .xls)"}), 400
         
-        # Read Excel file
-        wb = openpyxl.load_workbook(file)
+        # Read Excel file in read_only mode to reduce memory usage
+        wb = openpyxl.load_workbook(file, read_only=True, data_only=True)
         ws = wb.active
         
         # Get headers from first row
@@ -1819,98 +1826,86 @@ def upload_employees_excel(current_user):
         updated = 0
         skipped = 0
         errors = []
-        batch_size = 25  # Smaller batches to prevent timeout
+        processed = 0
+        batch_count = 0
         
-        # Get all rows first and filter out empty ones
-        all_rows = []
+        print(f"📊 بدء معالجة ملف Excel بطريقة التدفق لتقليل استهلاك الذاكرة")
+        
+        # Stream process rows without loading all in memory
         for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
             # Extract employee_id first to check if row is valid
             employee_id_col = col_indices.get('employee_id')
-            if employee_id_col is not None and employee_id_col < len(row):
-                employee_id = row[employee_id_col]
-                # Check if employee_id is not None, not empty, and not just whitespace
-                if employee_id is not None and str(employee_id).strip() and str(employee_id).strip() != 'None':
-                    # Also check if name exists
-                    name_col = col_indices.get('name')
-                    if name_col is not None and name_col < len(row):
-                        name = row[name_col]
-                        if name is not None and str(name).strip() and str(name).strip() != 'None':
-                            all_rows.append((row_idx, row))
-                        else:
-                            skipped += 1
-                    else:
-                        skipped += 1
-                else:
-                    skipped += 1
-            else:
+            if employee_id_col is None or employee_id_col >= len(row):
                 skipped += 1
-        
-        total_valid_rows = len(all_rows)
-        print(f"📊 بدء معالجة {total_valid_rows} صف صالح من أصل {ws.max_row - 1} صف")
-        
-        # Process in batches
-        for batch_start in range(0, total_valid_rows, batch_size):
-            batch_end = min(batch_start + batch_size, total_valid_rows)
-            batch_rows = all_rows[batch_start:batch_end]
-            
-            print(f"🔄 معالجة الدفعة {batch_start//batch_size + 1}: الصفوف {batch_start + 1}-{batch_end}")
-            
-            for row_idx, row in batch_rows:
-                try:
-                    # Extract data based on column indices
-                    emp_data = {}
-                    
-                    for field, col_idx in col_indices.items():
-                        value = row[col_idx] if col_idx < len(row) else None
-                        if value is not None and value != '':
-                            emp_data[field] = str(value).strip()
-                    
-                    # Double check - should not happen since we pre-filtered
-                    if not emp_data.get('employee_id') or not emp_data.get('name'):
-                        skipped += 1
-                        continue
+                continue
                 
-                    employee_id = emp_data['employee_id']
+            employee_id = row[employee_id_col]
+            # Check if employee_id is not None, not empty, and not just whitespace
+            if employee_id is None or not str(employee_id).strip() or str(employee_id).strip() == 'None':
+                skipped += 1
+                continue
+                
+            # Also check if name exists
+            name_col = col_indices.get('name')
+            if name_col is None or name_col >= len(row):
+                skipped += 1
+                continue
+                
+            name = row[name_col]
+            if name is None or not str(name).strip() or str(name).strip() == 'None':
+                skipped += 1
+                continue
+            try:
+                # Extract data based on column indices
+                emp_data = {}
+                
+                for field, col_idx in col_indices.items():
+                    value = row[col_idx] if col_idx < len(row) else None
+                    if value is not None and value != '':
+                        emp_data[field] = str(value).strip()
+                
+                employee_id = emp_data['employee_id']
+                
+                # Check if employee exists (single document get - more efficient)
+                emp_ref = db.collection('employees').document(employee_id)
+                existing_emp = emp_ref.get()
+                
+                if existing_emp.exists:
+                    # Update existing employee
+                    update_data = {k: v for k, v in emp_data.items() if k != 'employee_id'}
+                    update_data['updated_at'] = datetime.now().isoformat()
                     
-                    # Check if employee exists
-                    emp_ref = db.collection('employees').document(employee_id)
-                    existing_emp = emp_ref.get()
+                    # Direct update without function call overhead
+                    emp_ref.update(update_data)
+                    updated += 1
+                    print(f"✅ تم تحديث الموظف: {employee_id} - {emp_data.get('name')}")
+                else:
+                    # Create new employee - direct insert without duplicate check
+                    emp_data['id'] = employee_id
+                    emp_data['active'] = True
+                    emp_data['created_at'] = datetime.now().isoformat()
+                    emp_data['updated_at'] = datetime.now().isoformat()
+                    emp_data['status'] = 'active'
                     
-                    if existing_emp.exists:
-                        # Update existing employee
-                        update_data = {k: v for k, v in emp_data.items() if k != 'employee_id'}
-                        update_data['updated_at'] = datetime.now().isoformat()
-                        
-                        # Use the update_employee function
-                        if update_employee(employee_id, update_data):
-                            updated += 1
-                            print(f"✅ تم تحديث الموظف: {employee_id} - {emp_data.get('name')}")
-                        else:
-                            print(f"❌ فشل في تحديث الموظف: {employee_id}")
-                    else:
-                        # Create new employee
-                        emp_data['id'] = employee_id
-                        emp_data['active'] = True
-                        emp_data['created_at'] = datetime.now().isoformat()
-                        emp_data['updated_at'] = datetime.now().isoformat()
-                        
-                        # Use the create_employee function
-                        if create_employee(emp_data):
-                            added += 1
-                            print(f"➕ تم إضافة موظف جديد: {employee_id} - {emp_data.get('name')}")
-                        else:
-                            print(f"❌ فشل في إضافة الموظف: {employee_id}")
-                        
-                except Exception as row_error:
-                    error_msg = f"صف {row_idx}: {str(row_error)}"
-                    errors.append(error_msg)
-                    print(f"❌ {error_msg}")
-                    continue
-            
-            # Add small delay between batches to prevent timeout
-            if batch_start + batch_size < total_valid_rows:
-                import time
-                time.sleep(0.2)  # 200ms delay between batches
+                    # Direct set operation (more efficient than add)
+                    emp_ref.set(emp_data)
+                    added += 1
+                    print(f"➕ تم إضافة موظف جديد: {employee_id} - {emp_data.get('name')}")
+                
+                processed += 1
+                
+                # Progress logging every 50 rows
+                if processed % 50 == 0:
+                    print(f"📊 تم معالجة {processed} صف حتى الآن...")
+                    
+            except Exception as row_error:
+                error_msg = f"صف {row_idx}: {str(row_error)}"
+                errors.append(error_msg)
+                print(f"❌ {error_msg}")
+                continue
+        
+        # Close workbook to free memory
+        wb.close()
         
         result = {
             "success": True,
@@ -1919,10 +1914,10 @@ def upload_employees_excel(current_user):
             "skipped": skipped,
             "total": added + updated,
             "errors": errors,
-            "total_processed": total_valid_rows
+            "total_processed": processed
         }
         
-        print(f"✅ اكتمل رفع الملف: {added} إضافة، {updated} تحديث، {skipped} تجاهل من أصل {total_valid_rows} صف صالح")
+        print(f"✅ اكتمل رفع الملف: {added} إضافة، {updated} تحديث، {skipped} تجاهل من أصل {processed} صف معالج")
         
         return jsonify(result)
         
