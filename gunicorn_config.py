@@ -10,17 +10,17 @@ import multiprocessing
 bind = f"0.0.0.0:{os.environ.get('PORT', '5000')}"
 backlog = 2048
 
-# Worker processes
-workers = int(os.environ.get('GUNICORN_WORKERS', '2'))  # Reduced from default
+# Worker processes - optimized for limited resources
+workers = int(os.environ.get('GUNICORN_WORKERS', '2'))  # 2 workers for 512MB RAM
 worker_class = 'sync'
-worker_connections = 1000
-timeout = 120  # Increased timeout for large Excel uploads
+worker_connections = 100  # Reduced for limited resources
+timeout = 60  # Reduced since batch operations are fast now
 keepalive = 5
 
 # Worker lifecycle and memory management
-max_requests = 100  # Restart worker after 100 requests to prevent memory leaks
-max_requests_jitter = 20  # Add randomness to prevent all workers restarting at once
-graceful_timeout = 60  # Give workers 60s to finish current requests before forcefully killing
+max_requests = 50  # More aggressive restart to prevent memory leaks on limited resources
+max_requests_jitter = 10  # Add randomness to prevent all workers restarting at once
+graceful_timeout = 30  # Reduced since operations should complete faster now
 
 # Logging
 accesslog = '-'  # Log to stdout

@@ -1821,15 +1821,33 @@ def upload_employees_excel(current_user):
             missing_ar = [k for k, v in field_mapping.items() if v in missing_fields]
             return jsonify({"error": f"الأعمدة المطلوبة غير موجودة: {', '.join(missing_ar)}"}), 400
         
-        # Process rows in batches for better performance
+        # SMART OPTIMIZATION: Fetch all existing employee IDs once (single query)
+        print(f"🔍 جلب قائمة الموظفين الموجودين...")
+        existing_employee_ids = set()
+        try:
+            # Get all employee document IDs in one query (much faster than individual gets)
+            employees_ref = db.collection('employees')
+            docs = employees_ref.stream()
+            for doc in docs:
+                existing_employee_ids.add(doc.id)
+            print(f"✅ تم جلب {len(existing_employee_ids)} موظف موجود")
+        except Exception as e:
+            print(f"⚠️ خطأ في جلب الموظفين الموجودين: {e}")
+            # Continue anyway - will treat all as new
+        
+        # Process rows with batch writes
         added = 0
         updated = 0
         skipped = 0
         errors = []
         processed = 0
-        batch_count = 0
         
-        print(f"📊 بدء معالجة ملف Excel بطريقة التدفق لتقليل استهلاك الذاكرة")
+        # Firestore batch for efficient writes (up to 500 operations)
+        batch = db.batch()
+        batch_operations = 0
+        BATCH_SIZE = 100  # Commit every 100 operations
+        
+        print(f"📊 بدء معالجة ملف Excel بطريقة ذكية (تقليل استدعاءات Firestore)")
         
         # Stream process rows without loading all in memory
         for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
@@ -1865,44 +1883,59 @@ def upload_employees_excel(current_user):
                         emp_data[field] = str(value).strip()
                 
                 employee_id = emp_data['employee_id']
-                
-                # Check if employee exists (single document get - more efficient)
                 emp_ref = db.collection('employees').document(employee_id)
-                existing_emp = emp_ref.get()
                 
-                if existing_emp.exists:
-                    # Update existing employee
+                # Check against in-memory set (instant - no network call!)
+                if employee_id in existing_employee_ids:
+                    # Update existing employee using batch
                     update_data = {k: v for k, v in emp_data.items() if k != 'employee_id'}
                     update_data['updated_at'] = datetime.now().isoformat()
                     
-                    # Direct update without function call overhead
-                    emp_ref.update(update_data)
+                    # Add to batch
+                    batch.update(emp_ref, update_data)
+                    batch_operations += 1
                     updated += 1
-                    print(f"✅ تم تحديث الموظف: {employee_id} - {emp_data.get('name')}")
+                    print(f"✅ تحديث: {employee_id} - {emp_data.get('name')}")
                 else:
-                    # Create new employee - direct insert without duplicate check
+                    # Create new employee using batch
                     emp_data['id'] = employee_id
                     emp_data['active'] = True
                     emp_data['created_at'] = datetime.now().isoformat()
                     emp_data['updated_at'] = datetime.now().isoformat()
                     emp_data['status'] = 'active'
                     
-                    # Direct set operation (more efficient than add)
-                    emp_ref.set(emp_data)
+                    # Add to batch
+                    batch.set(emp_ref, emp_data)
+                    batch_operations += 1
                     added += 1
-                    print(f"➕ تم إضافة موظف جديد: {employee_id} - {emp_data.get('name')}")
+                    print(f"➕ إضافة: {employee_id} - {emp_data.get('name')}")
+                    
+                    # Add to set for subsequent checks in same upload
+                    existing_employee_ids.add(employee_id)
                 
                 processed += 1
                 
+                # Commit batch every BATCH_SIZE operations to avoid timeout
+                if batch_operations >= BATCH_SIZE:
+                    print(f"💾 حفظ دفعة من {batch_operations} عملية...")
+                    batch.commit()
+                    batch = db.batch()  # Create new batch
+                    batch_operations = 0
+                
                 # Progress logging every 50 rows
                 if processed % 50 == 0:
-                    print(f"📊 تم معالجة {processed} صف حتى الآن...")
+                    print(f"📊 تم معالجة {processed} صف...")
                     
             except Exception as row_error:
                 error_msg = f"صف {row_idx}: {str(row_error)}"
                 errors.append(error_msg)
                 print(f"❌ {error_msg}")
                 continue
+        
+        # Commit any remaining operations in final batch
+        if batch_operations > 0:
+            print(f"💾 حفظ الدفعة الأخيرة ({batch_operations} عملية)...")
+            batch.commit()
         
         # Close workbook to free memory
         wb.close()
