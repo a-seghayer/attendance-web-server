@@ -7,34 +7,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-# Optional deps: Flask-Compress and Flask-Caching
-try:
-    from flask_compress import Compress  # type: ignore
-except Exception:
-    class Compress:  # no-op fallback
-        def __init__(self, *args, **kwargs):
-            pass
-        def init_app(self, *args, **kwargs):
-            pass
-try:
-    from flask_caching import Cache  # type: ignore
-except Exception:
-    # Minimal no-op cache with get/set interface
-    class _NoopCache:
-        def __init__(self, *args, **kwargs):
-            pass
-        def get(self, key):
-            return None
-        def set(self, key, value, timeout=None):
-            return True
-    def Cache(*args, **kwargs):
-        return _NoopCache()
 from werkzeug.security import check_password_hash, generate_password_hash
-try:
-    from google.api_core.exceptions import ResourceExhausted
-except Exception:  # library not available at type-check time
-    class ResourceExhausted(Exception):
-        pass
 import jwt
 from firebase_config import (
     initialize_firebase,
@@ -195,22 +168,7 @@ CORS(app)  # Allow static site to call the API
 
 # Configure JSON to handle Arabic text properly
 app.config['JSON_AS_ASCII'] = False
-app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False  # reduce CPU/bytes in prod
-
-# Enable gzip/deflate compression for JSON and static responses (no-op if missing)
-try:
-    Compress(app)
-except Exception:
-    pass
-
-# Lightweight in-process cache (no-op if flask_caching not installed)
-try:
-    cache = Cache(app, config={
-        "CACHE_TYPE": "SimpleCache",
-        "CACHE_DEFAULT_TIMEOUT": 30
-    })
-except Exception:
-    cache = Cache()
+app.config['JSONIFY_PRETTYPRINT_REGULAR'] = True
 
 # Configure file upload limits
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max file size
@@ -316,8 +274,6 @@ def create_token(username: str, is_superadmin: bool, services: str) -> str:
         "admin": is_superadmin,
         "srv": services,
         "iat": int(datetime.utcnow().timestamp()),
-        # expire after 12 hours to minimize abuse/resource leaks from stale tokens
-        "exp": int((datetime.utcnow() + timedelta(hours=12)).timestamp()),
     }
     return jwt.encode(payload, SECRET, algorithm="HS256")
 
@@ -750,34 +706,15 @@ def firebase_status():
         # محاولة جلب عدد الطلبات
         try:
             requests_ref = db.collection('requests')
-            count = None
-            try:
-                # استخدام تجميع العد إذا كان مدعوماً من المكتبة
-                # ملاحظة: صيغة الوصول قد تختلف حسب إصدار المكتبة
-                count_query = requests_ref.count()
-                agg = count_query.get()
-                # حاول استخراج القيمة من النتيجة (تختلف البنية باختلاف الإصدارات)
-                if isinstance(agg, list) and agg:
-                    # google-cloud-firestore >= 2.7 يرجع List[AggregationResult]
-                    first = agg[0]
-                    # بعض الإصدارات تستخدم first[0].value
-                    count = getattr(first, 'value', None) or getattr(first[0], 'value', None)
-                    if count is None:
-                        # fallback أخير
-                        count = int(str(first)) if str(first).isdigit() else None
-            except Exception:
-                count = None
-            if count is None:
-                #Fallback آمن: عدّ يدوي (أثقل) لكنه يعمل إذا لم تتوفر count()
-                count = sum(1 for _ in requests_ref.stream())
+            all_docs = list(requests_ref.stream())
+            count = len(all_docs)
             
             return jsonify({
                 "status": "connected",
                 "message": "Firebase متصل بنجاح",
-                "requests_count": int(count)
+                "requests_count": count
             })
         except Exception as e:
-            print(f"خطأ في الوصول للبيانات: {str(e)}")
             return jsonify({
                 "status": "error",
                 "message": f"خطأ في الوصول للبيانات: {str(e)}"
@@ -804,22 +741,15 @@ def reset_all_requests():
         requests_ref = db.collection('requests')
         all_docs = list(requests_ref.stream())
         
-        # تحديث على دفعات لتقليل عدد الرحلات إلى Firestore
-        batch = db.batch()
         updated_count = 0
-        for i, doc in enumerate(all_docs, start=1):
-            batch.update(doc.reference, {
+        for doc in all_docs:
+            doc_ref = doc.reference
+            doc_ref.update({
                 'status': 'active',
                 'canceledBy': None,
                 'canceledAt': None
             })
             updated_count += 1
-            # نفذ الكوميت كل 400 عملية (حد آمن لدفعة واحدة)
-            if i % 400 == 0:
-                batch.commit()
-                batch = db.batch()
-        # كوميت أخير
-        batch.commit()
         
         return jsonify({
             "message": f"تم إعادة تعيين {updated_count} طلب لحالة نشط",
@@ -911,15 +841,16 @@ def get_latest_requests_endpoint():
     """جلب أحدث الطلبات"""
     try:
         limit = int(request.args.get("limit", 10))
-        cache_key = f"latest_requests:{limit}"
-
-        data = cache.get(cache_key)
-        if data is None:
-            # جلب من Firestore فقط عند الحاجة ثم التخزين في الذاكرة لمدة قصيرة
-            requests_list = get_latest_requests(limit)
-            cache.set(cache_key, requests_list, timeout=30)
-            data = requests_list
-        return jsonify(data)
+        print(f"🔍 جلب أحدث {limit} طلبات...")
+        
+        requests = get_latest_requests(limit)
+        print(f"📊 تم جلب {len(requests)} طلب من Firebase")
+        
+        # طباعة تفاصيل الطلبات للتشخيص
+        for i, req in enumerate(requests):
+            print(f"   طلب {i+1}: {req.get('employeeId', 'N/A')} - {req.get('kind', 'N/A')} - {req.get('status', 'N/A')}")
+        
+        return jsonify(requests)
         
     except Exception as e:
         print(f"❌ خطأ في جلب الطلبات: {str(e)}")
@@ -1872,23 +1803,11 @@ def get_dashboard_stats():
     try:
         from firebase_config import get_db, get_all_employees
         
-        # استخدم كاش لحماية الحصة وتقليل زمن الاستجابة
-        cache_key = "stats:dashboard"
-        cached = cache.get(cache_key)
-        if cached is not None:
-            return jsonify(cached)
-
         # إحصائيات الموظفين
-        total_employees = 0
-        active_employees = 0
-        try:
-            employees = get_all_employees()
-            total_employees = len(employees)
-            active_employees = len([e for e in employees if e.get('active', True)])
-        except ResourceExhausted:
-            # في حال نفاد الحصة نُعيد ما يتوفر فقط بدون تحميل كامل
-            pass
-
+        employees = get_all_employees()
+        total_employees = len(employees)
+        active_employees = len([e for e in employees if e.get('active', True)])
+        
         # إحصائيات الطلبات
         db = get_db()
         stats = {
@@ -1911,49 +1830,33 @@ def get_dashboard_stats():
         }
         
         if db:
-            try:
-                # إجمالي الطلبات عبر aggregation count إن توفرت
-                requests_ref = db.collection('requests')
-                try:
-                    stats["requests"]["total"] = int(requests_ref.count().get()[0][0].value)
-                except Exception:
-                    #Fallback آمن: حد أقصى 1000 لتجنب OOM
-                    stats["requests"]["total"] = sum(1 for _ in requests_ref.limit(1000).stream())
-
-                # احصائيات نوع/حالة عبر عينة أحدث 100 فقط لتقليل الكلفة
-                latest = requests_ref.order_by('createdAt', direction='DESCENDING').limit(100).stream()
-                for req in latest:
-                    rq = req.to_dict() or {}
-                    status = rq.get('status', 'active')
-                    kind = rq.get('kind') or rq.get('type', '')
-                    if status in ('cancelled', 'canceled'):
-                        stats["requests"]["cancelled"] += 1
-                    else:
-                        stats["requests"]["active"] += 1
-                    if kind == 'overtime':
-                        stats["requests"]["overtime"] += 1
-                    elif kind == 'leave':
-                        stats["requests"]["leave"] += 1
-            except ResourceExhausted:
-                pass
-
-            # إحصائيات المستخدمين (count aggregation أو حد أعلى)
-            try:
-                users_ref = db.collection('users')
-                pending_ref = db.collection('pendingUsers')
-                try:
-                    stats["users"]["total"] = int(users_ref.count().get()[0][0].value)
-                except Exception:
-                    stats["users"]["total"] = sum(1 for _ in users_ref.limit(1000).stream())
-                try:
-                    stats["users"]["pending"] = int(pending_ref.count().get()[0][0].value)
-                except Exception:
-                    stats["users"]["pending"] = sum(1 for _ in pending_ref.limit(1000).stream())
-            except ResourceExhausted:
-                pass
+            # إحصائيات الطلبات
+            requests_ref = db.collection('requests')
+            all_requests = list(requests_ref.stream())
+            stats["requests"]["total"] = len(all_requests)
+            
+            for req in all_requests:
+                req_data = req.to_dict()
+                status = req_data.get('status', 'active')
+                kind = req_data.get('kind', '')
+                
+                if status == 'active':
+                    stats["requests"]["active"] += 1
+                elif status == 'cancelled':
+                    stats["requests"]["cancelled"] += 1
+                    
+                if kind == 'overtime':
+                    stats["requests"]["overtime"] += 1
+                elif kind == 'leave':
+                    stats["requests"]["leave"] += 1
+            
+            # إحصائيات المستخدمين
+            users_ref = db.collection('users')
+            pending_ref = db.collection('pendingUsers')
+            
+            stats["users"]["total"] = len(list(users_ref.stream()))
+            stats["users"]["pending"] = len(list(pending_ref.stream()))
         
-        # خزّن 60 ثانية
-        cache.set(cache_key, stats, timeout=60)
         return jsonify(stats)
         
     except Exception as e:
@@ -1967,41 +1870,30 @@ def get_recent_activity():
     try:
         from firebase_config import get_db
         
-        # كاش قصير المدى 30 ثانية
-        cache_key = "stats:recent"
-        cached = cache.get(cache_key)
-        if cached is not None:
-            return jsonify(cached)
-
         db = get_db()
         activities = []
         
         if db:
-            try:
-                # جلب آخر 10 طلبات فقط
-                requests_ref = db.collection('requests')
-                recent_requests = requests_ref.order_by('createdAt', direction='DESCENDING').limit(10).stream()
-                
-                for req in recent_requests:
-                    req_data = req.to_dict() or {}
-                    activities.append({
-                        'type': 'request',
-                        'action': req_data.get('kind', 'unknown'),
-                        'employeeId': req_data.get('employeeId', ''),
-                        'supervisor': req_data.get('supervisor', ''),
-                        'status': req_data.get('status', 'active'),
-                        'timestamp': req_data.get('createdAt').isoformat() if req_data.get('createdAt') else None,
-                        'details': f"طلب {req_data.get('kind', '')} للموظف {req_data.get('employeeId', '')}"
-                    })
-            except ResourceExhausted:
-                # إذا تجاوزت الحصة نعيد نتيجة فارغة بدل انهيار العامل
-                activities = []
+            # جلب آخر 10 طلبات
+            requests_ref = db.collection('requests')
+            recent_requests = requests_ref.order_by('createdAt', direction='DESCENDING').limit(10).stream()
+            
+            for req in recent_requests:
+                req_data = req.to_dict()
+                activities.append({
+                    'type': 'request',
+                    'action': req_data.get('kind', 'unknown'),
+                    'employeeId': req_data.get('employeeId', ''),
+                    'supervisor': req_data.get('supervisor', ''),
+                    'status': req_data.get('status', 'active'),
+                    'timestamp': req_data.get('createdAt').isoformat() if req_data.get('createdAt') else None,
+                    'details': f"طلب {req_data.get('kind', '')} للموظف {req_data.get('employeeId', '')}"
+                })
         
         # ترتيب حسب التاريخ
         activities.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
-        result = activities[:10]
-        cache.set(cache_key, result, timeout=30)
-        return jsonify(result)
+        
+        return jsonify(activities[:10])
         
     except Exception as e:
         print(f"❌ خطأ في جلب الأنشطة: {str(e)}")
