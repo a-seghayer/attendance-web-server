@@ -827,7 +827,7 @@ def sync_employees_batch(employees_data: list) -> dict:
             "skipped": 0
         }
         
-        print(f"🔄 بدء مزامنة محسنة لـ {len(employees_data)} موظف...")
+        print(f"🔄 بدء إضافة الموظفين الجدد فقط من {len(employees_data)} موظف (الأولوية لإدارة الموظفين)...")
         
         # جلب جميع الموظفين الموجودين مرة واحدة للمقارنة السريعة
         employees_ref = db.collection('employees')
@@ -864,23 +864,10 @@ def sync_employees_batch(employees_data: list) -> dict:
                     
                     # البحث السريع في البيانات المحملة
                     if employee_id in existing_employees:
-                        # موظف موجود - تحقق من التحديث
-                        existing_data = existing_employees[employee_id]['data']
-                        
-                        if existing_data.get('name') != name or existing_data.get('department') != department:
-                            # تحديث مطلوب
-                            doc_ref = existing_employees[employee_id]['doc_ref']
-                            doc_ref.update({
-                                'name': name,
-                                'department': department,
-                                'updated_at': datetime.utcnow(),
-                                'synced_from_attendance': True
-                            })
-                            stats["updated"] += 1
-                            if stats["updated"] <= 5:  # طباعة أول 5 تحديثات فقط
-                                print(f"✅ تم تحديث الموظف: {employee_id} - {name}")
-                        else:
-                            stats["skipped"] += 1
+                        # موظف موجود - لا نحدثه (الأولوية لإدارة الموظفين)
+                        stats["skipped"] += 1
+                        if stats["skipped"] <= 5:  # طباعة أول 5 تجاهلات فقط
+                            print(f"⏭️ تجاهل الموظف الموجود: {employee_id} - {name} (الأولوية لإدارة الموظفين)")
                     else:
                         # موظف جديد
                         employee_data = {
@@ -911,7 +898,7 @@ def sync_employees_batch(employees_data: list) -> dict:
             progress = ((i + len(batch)) / len(employees_data)) * 100
             print(f"📊 التقدم: {progress:.1f}% ({i + len(batch)}/{len(employees_data)})")
         
-        print(f"✅ انتهت المزامنة - إنشاء: {stats['created']}, تحديث: {stats['updated']}, تخطي: {stats['skipped']}, أخطاء: {stats['errors']}")
+        print(f"✅ انتهت المزامنة - إنشاء: {stats['created']}, تجاهل موجودين: {stats['skipped']}, أخطاء: {stats['errors']} (الأولوية لإدارة الموظفين)")
         return stats
         
     except Exception as e:
