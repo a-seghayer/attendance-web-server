@@ -1761,7 +1761,7 @@ def get_departments(current_user):
 def upload_employees_excel(current_user):
     """رفع ومعالجة ملف Excel لإضافة/تحديث الموظفين"""
     try:
-        from firebase_config import db, update_employee, create_employee_record
+        from firebase_config import db, update_employee, create_employee
         import openpyxl
         
         print(f"📤 استقبال طلب رفع ملف Excel للموظفين من {current_user}")
@@ -1845,18 +1845,26 @@ def upload_employees_excel(current_user):
                     # Update existing employee
                     update_data = {k: v for k, v in emp_data.items() if k != 'employee_id'}
                     update_data['updated_at'] = datetime.now().isoformat()
-                    emp_ref.update(update_data)
-                    updated += 1
-                    print(f"✅ تم تحديث الموظف: {employee_id} - {emp_data.get('name')}")
+                    
+                    # Use the update_employee function
+                    if update_employee(employee_id, update_data):
+                        updated += 1
+                        print(f"✅ تم تحديث الموظف: {employee_id} - {emp_data.get('name')}")
+                    else:
+                        print(f"❌ فشل في تحديث الموظف: {employee_id}")
                 else:
                     # Create new employee
                     emp_data['id'] = employee_id
                     emp_data['active'] = True
                     emp_data['created_at'] = datetime.now().isoformat()
                     emp_data['updated_at'] = datetime.now().isoformat()
-                    emp_ref.set(emp_data)
-                    added += 1
-                    print(f"➕ تم إضافة موظف جديد: {employee_id} - {emp_data.get('name')}")
+                    
+                    # Use the create_employee function
+                    if create_employee(emp_data):
+                        added += 1
+                        print(f"➕ تم إضافة موظف جديد: {employee_id} - {emp_data.get('name')}")
+                    else:
+                        print(f"❌ فشل في إضافة الموظف: {employee_id}")
                     
             except Exception as row_error:
                 error_msg = f"صف {row_idx}: {str(row_error)}"
