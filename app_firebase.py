@@ -1526,6 +1526,7 @@ def cleanup_duplicate_employees(current_user):
         print(f"🧹 بدء تنظيف الموظفين المكررين بواسطة {current_user}")
         
         from firebase_config import db
+        from datetime import datetime
         
         # جلب جميع الموظفين
         employees_ref = db.collection('employees')
@@ -1533,19 +1534,32 @@ def cleanup_duplicate_employees(current_user):
         
         # تجميع الموظفين حسب employee_id
         employees_by_id = {}
+        all_docs = []
+        
         for doc in docs:
             doc_data = doc.to_dict()
-            emp_id = doc_data.get('employee_id') or doc_data.get('id') or doc.id
+            emp_id = doc_data.get('employee_id') or doc_data.get('id')
+            
+            # تجاهل الوثائق بدون employee_id صحيح
+            if not emp_id:
+                print(f"⚠️ وثيقة بدون employee_id: {doc.id}")
+                continue
+                
+            emp_id = str(emp_id).strip()
             
             if emp_id not in employees_by_id:
                 employees_by_id[emp_id] = []
             
-            employees_by_id[emp_id].append({
+            doc_info = {
                 'doc_id': doc.id,
                 'data': doc_data,
                 'updated_at': doc_data.get('updated_at', ''),
-                'created_at': doc_data.get('created_at', '')
-            })
+                'created_at': doc_data.get('created_at', ''),
+                'employee_id': emp_id
+            }
+            
+            employees_by_id[emp_id].append(doc_info)
+            all_docs.append(doc_info)
         
         # البحث عن المكررات
         duplicates_found = 0
@@ -1558,19 +1572,48 @@ def cleanup_duplicate_employees(current_user):
                 duplicates_found += len(employee_docs) - 1
                 print(f"🔍 وجد {len(employee_docs)} نسخ للموظف {emp_id}")
                 
-                # ترتيب حسب تاريخ التحديث (الأحدث أولاً)
-                employee_docs.sort(key=lambda x: x.get('updated_at', ''), reverse=True)
+                # البحث عن الوثيقة التي معرفها = employee_id (الصحيحة)
+                correct_doc = None
+                wrong_docs = []
                 
-                # الاحتفاظ بالأول (الأحدث) وحذف الباقي
-                keep_doc = employee_docs[0]
-                print(f"  ✅ الاحتفاظ بـ: {keep_doc['doc_id']} (آخر تحديث: {keep_doc.get('updated_at', 'غير محدد')})")
+                for doc_info in employee_docs:
+                    if doc_info['doc_id'] == emp_id:
+                        correct_doc = doc_info
+                        print(f"  ✅ وجدت الوثيقة الصحيحة: {doc_info['doc_id']} (معرف الوثيقة = رقم الموظف)")
+                    else:
+                        wrong_docs.append(doc_info)
                 
-                for duplicate_doc in employee_docs[1:]:
-                    doc_ref = db.collection('employees').document(duplicate_doc['doc_id'])
+                # إذا لم توجد وثيقة صحيحة، اختر الأحدث وانقلها للمعرف الصحيح
+                if not correct_doc:
+                    # ترتيب حسب تاريخ التحديث (الأحدث أولاً)
+                    employee_docs.sort(key=lambda x: x.get('updated_at', ''), reverse=True)
+                    newest_doc = employee_docs[0]
+                    
+                    print(f"  📝 إنشاء وثيقة جديدة بالمعرف الصحيح: {emp_id}")
+                    
+                    # إنشاء وثيقة جديدة بالمعرف الصحيح
+                    correct_ref = db.collection('employees').document(emp_id)
+                    new_data = newest_doc['data'].copy()
+                    new_data['employee_id'] = emp_id
+                    new_data['id'] = emp_id
+                    new_data['updated_at'] = datetime.now().isoformat()
+                    
+                    batch.set(correct_ref, new_data)
+                    batch_operations += 1
+                    
+                    # حذف جميع الوثائق الخاطئة
+                    wrong_docs = employee_docs
+                else:
+                    # الاحتفاظ بالوثيقة الصحيحة وحذف الباقي
+                    pass
+                
+                # حذف جميع الوثائق الخاطئة
+                for wrong_doc in wrong_docs:
+                    doc_ref = db.collection('employees').document(wrong_doc['doc_id'])
                     batch.delete(doc_ref)
                     batch_operations += 1
                     duplicates_removed += 1
-                    print(f"  🗑️ حذف المكرر: {duplicate_doc['doc_id']}")
+                    print(f"  🗑️ حذف المكرر: {wrong_doc['doc_id']}")
                     
                     # تنفيذ batch كل 100 عملية
                     if batch_operations >= 100:
@@ -2046,14 +2089,16 @@ def upload_employees_excel(current_user):
                     if value is not None and value != '':
                         emp_data[field] = str(value).strip()
                 
-                employee_id = emp_data['employee_id']
+                employee_id = str(emp_data['employee_id']).strip()
+                
+                # CRITICAL: Always use employee_id as document ID to ensure uniqueness
+                emp_ref = db.collection('employees').document(employee_id)
                 
                 # Check against in-memory set (instant - no network call!)
                 if employee_id in existing_employee_ids:
                     # Get existing employee data for comparison
                     existing_emp = existing_employees_data[employee_id]
                     existing_data = existing_emp['data']
-                    doc_id = existing_emp['doc_id']
                     
                     # Compare data to see if update is needed
                     needs_update = False
@@ -2062,7 +2107,7 @@ def upload_employees_excel(current_user):
                     # Compare each field
                     for field, new_value in emp_data.items():
                         if field == 'employee_id':
-                            continue  # Skip employee_id
+                            continue  # Skip employee_id - it's the key
                         
                         old_value = existing_data.get(field, '')
                         if str(old_value).strip() != str(new_value).strip():
@@ -2070,11 +2115,9 @@ def upload_employees_excel(current_user):
                             needs_update = True
                     
                     if needs_update:
-                        # Use the correct document ID for update
-                        emp_ref = db.collection('employees').document(doc_id)
                         update_data['updated_at'] = datetime.now().isoformat()
                         
-                        # Add to batch
+                        # Add to batch - using employee_id as document ID
                         batch.update(emp_ref, update_data)
                         batch_operations += 1
                         updated += 1
@@ -2088,16 +2131,14 @@ def upload_employees_excel(current_user):
                         print(f"⏭️ تجاهل: {employee_id} - {emp_data.get('name')} (لا توجد تغييرات)")
                 else:
                     # Create new employee using batch
-                    emp_data['id'] = employee_id
+                    emp_data['id'] = employee_id  # Keep for backward compatibility
+                    emp_data['employee_id'] = employee_id  # Ensure this field exists
                     emp_data['active'] = True
                     emp_data['created_at'] = datetime.now().isoformat()
                     emp_data['updated_at'] = datetime.now().isoformat()
                     emp_data['status'] = 'active'
                     
-                    # Use employee_id as document ID to prevent duplicates
-                    emp_ref = db.collection('employees').document(employee_id)
-                    
-                    # Add to batch
+                    # CRITICAL: Use employee_id as document ID - this prevents duplicates
                     batch.set(emp_ref, emp_data)
                     batch_operations += 1
                     added += 1
@@ -2106,7 +2147,7 @@ def upload_employees_excel(current_user):
                     # Add to set for subsequent checks in same upload
                     existing_employee_ids.add(employee_id)
                     existing_employees_data[employee_id] = {
-                        'doc_id': employee_id,
+                        'doc_id': employee_id,  # document ID = employee_id
                         'data': emp_data
                     }
                 
