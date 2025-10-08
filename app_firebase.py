@@ -230,16 +230,27 @@ else:
                 'username': 'anas',
                 'password_hash': generate_password_hash(os.environ.get('DEFAULT_ADMIN_PASSWORD', 'TempPass123!')),
                 'is_superadmin': True,
-                'services': 'attendance,overtime,employees',
+                'services': 'attendance,overtime,employees,stats',
                 'is_active': True
             }
             create_user(admin_data)
             print("✅ تم إنشاء المستخدم الافتراضي 'anas'")
         else:
-            # تحديث خدمات المستخدم الموجود إذا لم تحتوِ على employees
+            # تحديث خدمات المستخدم الموجود إذا لم تحتوِ على employees أو stats
             current_services = admin_user.get('services', '')
+            services_to_add = []
+            
             if 'employees' not in current_services:
-                updated_services = current_services + ',employees' if current_services else 'employees'
+                services_to_add.append('employees')
+            if 'stats' not in current_services:
+                services_to_add.append('stats')
+            
+            if services_to_add:
+                # بناء قائمة الخدمات المحدثة
+                services_list = [s.strip() for s in current_services.split(',') if s.strip()]
+                services_list.extend(services_to_add)
+                updated_services = ','.join(services_list)
+                
                 from firebase_config import db
                 if db:
                     try:
@@ -249,7 +260,7 @@ else:
                         if docs:
                             doc_ref = docs[0].reference
                             doc_ref.update({'services': updated_services})
-                            print("✅ تم تحديث خدمات المستخدم الافتراضي لتشمل إدارة الموظفين")
+                            print(f"✅ تم تحديث خدمات المستخدم الافتراضي: {', '.join(services_to_add)}")
                     except Exception as update_error:
                         print(f"⚠️ خطأ في تحديث خدمات المستخدم: {update_error}")
             else:
@@ -1566,6 +1577,183 @@ def add_user_service(current_user):
     except Exception as e:
         print(f"خطأ في إضافة الخدمة: {e}")
         return jsonify({"error": str(e)}), 500
+
+# === نقاط النهاية للإحصائيات ===
+
+@app.route("/api/stats/dashboard", methods=["GET"])
+@require_auth("stats")
+def get_dashboard_stats():
+    """جلب إحصائيات سريعة للوحة التحكم - يتطلب صلاحية stats"""
+    try:
+        from firebase_config import get_db, get_all_employees
+        
+        # إحصائيات الموظفين
+        employees = get_all_employees()
+        total_employees = len(employees)
+        active_employees = len([e for e in employees if e.get('active', True)])
+        
+        # إحصائيات الطلبات
+        db = get_db()
+        stats = {
+            "employees": {
+                "total": total_employees,
+                "active": active_employees,
+                "inactive": total_employees - active_employees
+            },
+            "requests": {
+                "total": 0,
+                "active": 0,
+                "cancelled": 0,
+                "overtime": 0,
+                "leave": 0
+            },
+            "users": {
+                "total": 0,
+                "pending": 0
+            }
+        }
+        
+        if db:
+            # إحصائيات الطلبات
+            requests_ref = db.collection('requests')
+            all_requests = list(requests_ref.stream())
+            stats["requests"]["total"] = len(all_requests)
+            
+            for req in all_requests:
+                req_data = req.to_dict()
+                status = req_data.get('status', 'active')
+                kind = req_data.get('kind', '')
+                
+                if status == 'active':
+                    stats["requests"]["active"] += 1
+                elif status == 'cancelled':
+                    stats["requests"]["cancelled"] += 1
+                    
+                if kind == 'overtime':
+                    stats["requests"]["overtime"] += 1
+                elif kind == 'leave':
+                    stats["requests"]["leave"] += 1
+            
+            # إحصائيات المستخدمين
+            users_ref = db.collection('users')
+            pending_ref = db.collection('pendingUsers')
+            
+            stats["users"]["total"] = len(list(users_ref.stream()))
+            stats["users"]["pending"] = len(list(pending_ref.stream()))
+        
+        return jsonify(stats)
+        
+    except Exception as e:
+        print(f"❌ خطأ في جلب الإحصائيات: {str(e)}")
+        return jsonify({"error": "خطأ في جلب الإحصائيات"}), 500
+
+@app.route("/api/stats/recent-activity", methods=["GET"])
+@require_auth("stats")
+def get_recent_activity():
+    """جلب آخر الأنشطة في النظام - يتطلب صلاحية stats"""
+    try:
+        from firebase_config import get_db
+        
+        db = get_db()
+        activities = []
+        
+        if db:
+            # جلب آخر 10 طلبات
+            requests_ref = db.collection('requests')
+            recent_requests = requests_ref.order_by('createdAt', direction='DESCENDING').limit(10).stream()
+            
+            for req in recent_requests:
+                req_data = req.to_dict()
+                activities.append({
+                    'type': 'request',
+                    'action': req_data.get('kind', 'unknown'),
+                    'employeeId': req_data.get('employeeId', ''),
+                    'supervisor': req_data.get('supervisor', ''),
+                    'status': req_data.get('status', 'active'),
+                    'timestamp': req_data.get('createdAt').isoformat() if req_data.get('createdAt') else None,
+                    'details': f"طلب {req_data.get('kind', '')} للموظف {req_data.get('employeeId', '')}"
+                })
+        
+        # ترتيب حسب التاريخ
+        activities.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+        
+        return jsonify(activities[:10])
+        
+    except Exception as e:
+        print(f"❌ خطأ في جلب الأنشطة: {str(e)}")
+        return jsonify({"error": "خطأ في جلب الأنشطة"}), 500
+
+@app.route("/api/employees/search", methods=["POST"])
+@token_required
+def search_employees_advanced(current_user):
+    """بحث متقدم في الموظفين"""
+    try:
+        from firebase_config import get_all_employees
+        
+        data = request.get_json()
+        query = data.get('query', '').lower()
+        department = data.get('department', '')
+        active_only = data.get('active_only', False)
+        
+        employees = get_all_employees()
+        
+        # تطبيق الفلاتر
+        filtered_employees = employees
+        
+        # فلتر النص
+        if query:
+            filtered_employees = [
+                e for e in filtered_employees
+                if query in e.get('name', '').lower() 
+                or query in str(e.get('employee_id', '')).lower()
+                or query in e.get('department', '').lower()
+            ]
+        
+        # فلتر القسم
+        if department:
+            filtered_employees = [
+                e for e in filtered_employees
+                if e.get('department', '') == department
+            ]
+        
+        # فلتر النشطين فقط
+        if active_only:
+            filtered_employees = [
+                e for e in filtered_employees
+                if e.get('active', True)
+            ]
+        
+        return jsonify({
+            "total": len(filtered_employees),
+            "employees": filtered_employees
+        })
+        
+    except Exception as e:
+        print(f"❌ خطأ في البحث: {str(e)}")
+        return jsonify({"error": "خطأ في البحث"}), 500
+
+@app.route("/api/employees/departments", methods=["GET"])
+@token_required
+def get_departments(current_user):
+    """جلب قائمة الأقسام المتاحة"""
+    try:
+        from firebase_config import get_all_employees
+        
+        employees = get_all_employees()
+        departments = set()
+        
+        for emp in employees:
+            dept = emp.get('department', '')
+            if dept:
+                departments.add(dept)
+        
+        return jsonify({
+            "departments": sorted(list(departments))
+        })
+        
+    except Exception as e:
+        print(f"❌ خطأ في جلب الأقسام: {str(e)}")
+        return jsonify({"error": "خطأ في جلب الأقسام"}), 500
 
 # === نقاط النهاية العامة ===
 
