@@ -793,6 +793,9 @@ def create_request_endpoint():
         kind = data.get("kind", "").strip()
         req_date = data.get("date", "").strip()
         reason = data.get("reason", "").strip()
+        work_mode = (data.get("work_mode") or "office").strip().lower()  # office | remote
+        start_time = (data.get("start_time") or "").strip()
+        end_time = (data.get("end_time") or "").strip()
         
         if not employee_id or not kind or not req_date:
             return jsonify({"error": "معرف الموظف ونوع الطلب والتاريخ مطلوبة"}), 400
@@ -806,16 +809,42 @@ def create_request_endpoint():
             "kind": kind,
             "date": req_date,
             "reason": reason,
-            "supervisor": request.user.get("sub", "")
+            "supervisor": request.user.get("sub", ""),
+            "work_mode": work_mode if kind == "overtime" else None
         }
         
-        # إضافة ساعات الإضافي إذا كان النوع overtime
+        # إضافة ساعات/تفاصيل الإضافي إذا كان النوع overtime
         if kind == "overtime":
-            hours = data.get("hours", 0)
-            try:
-                request_data["hours"] = float(hours)
-            except (ValueError, TypeError):
-                return jsonify({"error": "ساعات الإضافي يجب أن تكون رقماً"}), 400
+            if work_mode not in ["office", "remote"]:
+                return jsonify({"error": "وضع العمل غير صالح. المسموح: office أو remote"}), 400
+
+            if work_mode == "remote":
+                # يتطلب تحديد وقت البداية والنهاية
+                if not start_time or not end_time:
+                    return jsonify({"error": "للعمل عن بُعد، وقت البداية ووقت النهاية مطلوبان"}), 400
+                # حساب الساعات من HH:MM
+                try:
+                    sh, sm = [int(x) for x in start_time.split(":")]
+                    eh, em = [int(x) for x in end_time.split(":")]
+                    start_minutes = sh * 60 + sm
+                    end_minutes = eh * 60 + em
+                    if end_minutes <= start_minutes:
+                        return jsonify({"error": "وقت النهاية يجب أن يكون بعد وقت البداية"}), 400
+                    minutes = end_minutes - start_minutes
+                    hours_val = round(minutes / 60.0, 2)
+                    request_data["hours"] = hours_val
+                    request_data["remote_start"] = start_time
+                    request_data["remote_end"] = end_time
+                except Exception:
+                    return jsonify({"error": "صيغة الوقت غير صحيحة. استخدم HH:MM"}), 400
+            else:
+                # office: لا نفرض ساعات عند الإنشاء، يمكن احتسابها لاحقاً من البصمة
+                hours = data.get("hours")
+                if hours not in (None, ""):
+                    try:
+                        request_data["hours"] = float(hours)
+                    except (ValueError, TypeError):
+                        return jsonify({"error": "ساعات الإضافي يجب أن تكون رقماً"}), 400
         
         # إضافة تاريخ النهاية إذا كان النوع leave
         if kind == "leave":
