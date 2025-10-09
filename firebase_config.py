@@ -905,6 +905,395 @@ def sync_employees_batch(employees_data: list) -> dict:
         print(f"❌ خطأ في مزامنة الموظفين: {str(e)}")
         return {"error": str(e)}
 
+# === دوال إدارة الأداء اليومي ===
+
+def save_daily_performance(employee_id: str, date: str, performance_data: dict) -> bool:
+    """
+    حفظ أو تحديث الأداء اليومي للموظف
+    يقوم بالتحديث إذا كانت البيانات موجودة مسبقاً
+    """
+    try:
+        db = get_db()
+        if not db:
+            return False
+        
+        # إنشاء معرف فريد للسجل (employee_id + date)
+        performance_id = f"{employee_id}_{date}"
+        
+        # إضافة metadata
+        performance_data['employee_id'] = employee_id
+        performance_data['date'] = date
+        performance_data['updated_at'] = datetime.utcnow()
+        
+        # البحث عن سجل موجود
+        performance_ref = db.collection('daily_performance').document(performance_id)
+        existing = performance_ref.get()
+        
+        if existing.exists:
+            # تحديث السجل الموجود
+            performance_ref.update(performance_data)
+            print(f"🔄 تم تحديث الأداء اليومي: {employee_id} - {date}")
+        else:
+            # إنشاء سجل جديد
+            performance_data['created_at'] = datetime.utcnow()
+            performance_ref.set(performance_data)
+            print(f"✅ تم حفظ الأداء اليومي: {employee_id} - {date}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ خطأ في حفظ الأداء اليومي: {str(e)}")
+        return False
+
+def save_daily_performance_batch(performance_records: list) -> dict:
+    """
+    حفظ مجموعة من سجلات الأداء اليومي دفعة واحدة
+    performance_records: قائمة من القواميس تحتوي على employee_id, date, و بيانات الأداء
+    """
+    try:
+        db = get_db()
+        if not db:
+            return {"error": "قاعدة البيانات غير متاحة"}
+        
+        stats = {
+            "total": len(performance_records),
+            "created": 0,
+            "updated": 0,
+            "errors": 0
+        }
+        
+        print(f"🔄 بدء حفظ {len(performance_records)} سجل أداء يومي...")
+        
+        # جلب السجلات الموجودة مرة واحدة
+        performance_ref = db.collection('daily_performance')
+        existing_records = {}
+        
+        try:
+            for doc in performance_ref.stream():
+                existing_records[doc.id] = doc.reference
+            print(f"📋 تم جلب {len(existing_records)} سجل موجود")
+        except Exception as e:
+            print(f"⚠️ خطأ في جلب السجلات الموجودة: {e}")
+        
+        # معالجة السجلات
+        batch_size = 100  # حد Firebase للدفعة
+        for i in range(0, len(performance_records), batch_size):
+            batch_records = performance_records[i:i + batch_size]
+            batch = db.batch()
+            batch_count = 0
+            
+            for record in batch_records:
+                try:
+                    employee_id = record.get('employee_id')
+                    date = record.get('date')
+                    
+                    if not employee_id or not date:
+                        stats["errors"] += 1
+                        continue
+                    
+                    # إنشاء معرف فريد
+                    performance_id = f"{employee_id}_{date}"
+                    record['updated_at'] = datetime.utcnow()
+                    
+                    # البحث في السجلات الموجودة
+                    if performance_id in existing_records:
+                        # تحديث
+                        batch.update(existing_records[performance_id], record)
+                        stats["updated"] += 1
+                    else:
+                        # إنشاء جديد
+                        record['created_at'] = datetime.utcnow()
+                        doc_ref = performance_ref.document(performance_id)
+                        batch.set(doc_ref, record)
+                        stats["created"] += 1
+                        existing_records[performance_id] = doc_ref
+                    
+                    batch_count += 1
+                    
+                except Exception as record_error:
+                    print(f"❌ خطأ في معالجة سجل: {record_error}")
+                    stats["errors"] += 1
+            
+            # تنفيذ الدفعة
+            if batch_count > 0:
+                batch.commit()
+                print(f"✅ تم حفظ دفعة {i//batch_size + 1}: {batch_count} سجل")
+        
+        print(f"✅ انتهى حفظ الأداء اليومي - جديد: {stats['created']}, محدث: {stats['updated']}, أخطاء: {stats['errors']}")
+        return stats
+        
+    except Exception as e:
+        print(f"❌ خطأ في حفظ الأداء اليومي: {str(e)}")
+        return {"error": str(e)}
+
+def get_employee_performance(employee_id: str, start_date: str = None, end_date: str = None) -> list:
+    """
+    جلب الأداء اليومي لموظف معين
+    مع إمكانية تحديد فترة زمنية
+    """
+    try:
+        db = get_db()
+        if not db:
+            return []
+        
+        # إنشاء الاستعلام
+        query = db.collection('daily_performance').where('employee_id', '==', employee_id)
+        
+        # إضافة فلتر التاريخ إذا تم تحديده
+        if start_date:
+            query = query.where('date', '>=', start_date)
+        if end_date:
+            query = query.where('date', '<=', end_date)
+        
+        # ترتيب حسب التاريخ
+        query = query.order_by('date', direction=firestore.Query.DESCENDING)
+        
+        # جلب البيانات
+        performance_records = []
+        for doc in query.stream():
+            data = doc.to_dict()
+            data['id'] = doc.id
+            performance_records.append(data)
+        
+        print(f"📊 تم جلب {len(performance_records)} سجل أداء للموظف {employee_id}")
+        return performance_records
+        
+    except Exception as e:
+        print(f"❌ خطأ في جلب الأداء اليومي: {str(e)}")
+        return []
+
+def get_employee_by_id(employee_id: str) -> dict:
+    """جلب بيانات موظف معين بواسطة رقمه"""
+    try:
+        db = get_db()
+        if not db:
+            return None
+        
+        # البحث عن الموظف
+        employees_ref = db.collection('employees')
+        query = employees_ref.where('employee_id', '==', employee_id).limit(1)
+        
+        docs = list(query.stream())
+        if docs:
+            employee_data = docs[0].to_dict()
+            employee_data['doc_id'] = docs[0].id
+            return employee_data
+        
+        return None
+        
+    except Exception as e:
+        print(f"❌ خطأ في جلب بيانات الموظف: {str(e)}")
+        return None
+
+def delete_employee_performance(employee_id: str, date: str = None) -> bool:
+    """
+    حذف سجلات الأداء اليومي للموظف
+    إذا تم تحديد تاريخ، يتم حذف سجل ذلك اليوم فقط
+    """
+    try:
+        db = get_db()
+        if not db:
+            return False
+        
+        if date:
+            # حذف سجل يوم محدد
+            performance_id = f"{employee_id}_{date}"
+            db.collection('daily_performance').document(performance_id).delete()
+            print(f"🗑️ تم حذف سجل الأداء: {employee_id} - {date}")
+        else:
+            # حذف جميع سجلات الموظف
+            query = db.collection('daily_performance').where('employee_id', '==', employee_id)
+            deleted_count = 0
+            
+            for doc in query.stream():
+                doc.reference.delete()
+                deleted_count += 1
+            
+            print(f"🗑️ تم حذف {deleted_count} سجل أداء للموظف {employee_id}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ خطأ في حذف الأداء اليومي: {str(e)}")
+        return False
+
+# === دوال إدارة ملخص الأداء ===
+
+def save_employee_summary(employee_id: str, processing_date: str, summary_data: dict) -> bool:
+    """
+    حفظ ملخص الأداء للموظف مع تاريخ المعالجة
+    يتم إنشاء سجل جديد لكل معالجة
+    """
+    try:
+        db = get_db()
+        if not db:
+            return False
+        
+        # إضافة metadata
+        summary_data['employee_id'] = employee_id
+        summary_data['processing_date'] = processing_date
+        summary_data['created_at'] = datetime.utcnow()
+        summary_data['updated_at'] = datetime.utcnow()
+        
+        # حفظ السجل (كل معالجة سجل جديد)
+        db.collection('employee_summaries').add(summary_data)
+        print(f"✅ تم حفظ ملخص الأداء: {employee_id} - معالجة {processing_date}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ خطأ في حفظ ملخص الأداء: {str(e)}")
+        return False
+
+def save_employee_summaries_batch(summary_records: list, processing_date: str) -> dict:
+    """
+    حفظ مجموعة من ملخصات الأداء دفعة واحدة
+    كل معالجة تنشئ سجلات جديدة
+    """
+    try:
+        db = get_db()
+        if not db:
+            return {"error": "قاعدة البيانات غير متاحة"}
+        
+        stats = {
+            "total": len(summary_records),
+            "created": 0,
+            "errors": 0
+        }
+        
+        print(f"🔄 بدء حفظ {len(summary_records)} ملخص أداء - معالجة {processing_date}...")
+        
+        # معالجة السجلات دفعياً
+        batch_size = 100
+        for i in range(0, len(summary_records), batch_size):
+            batch_records = summary_records[i:i + batch_size]
+            batch = db.batch()
+            batch_count = 0
+            
+            for record in batch_records:
+                try:
+                    employee_id = record.get('employee_id')
+                    
+                    if not employee_id:
+                        stats["errors"] += 1
+                        continue
+                    
+                    # إضافة metadata
+                    record['processing_date'] = processing_date
+                    record['created_at'] = datetime.utcnow()
+                    record['updated_at'] = datetime.utcnow()
+                    
+                    # إنشاء سجل جديد
+                    doc_ref = db.collection('employee_summaries').document()
+                    batch.set(doc_ref, record)
+                    stats["created"] += 1
+                    batch_count += 1
+                    
+                except Exception as record_error:
+                    print(f"❌ خطأ في معالجة ملخص: {record_error}")
+                    stats["errors"] += 1
+            
+            # تنفيذ الدفعة
+            if batch_count > 0:
+                batch.commit()
+                print(f"✅ تم حفظ دفعة {i//batch_size + 1}: {batch_count} ملخص")
+        
+        print(f"✅ انتهى حفظ الملخصات - جديد: {stats['created']}, أخطاء: {stats['errors']}")
+        return stats
+        
+    except Exception as e:
+        print(f"❌ خطأ في حفظ ملخصات الأداء: {str(e)}")
+        return {"error": str(e)}
+
+def get_employee_summaries(employee_id: str) -> list:
+    """
+    جلب جميع ملخصات الأداء لموظف معين
+    مرتبة حسب تاريخ المعالجة (الأحدث أولاً)
+    """
+    try:
+        db = get_db()
+        if not db:
+            return []
+        
+        # جلب الملخصات
+        query = db.collection('employee_summaries')\
+                  .where('employee_id', '==', employee_id)\
+                  .order_by('processing_date', direction=firestore.Query.DESCENDING)
+        
+        summaries = []
+        for doc in query.stream():
+            data = doc.to_dict()
+            data['id'] = doc.id
+            summaries.append(data)
+        
+        print(f"📊 تم جلب {len(summaries)} ملخص للموظف {employee_id}")
+        return summaries
+        
+    except Exception as e:
+        print(f"❌ خطأ في جلب ملخصات الأداء: {str(e)}")
+        return []
+
+def get_latest_employee_summary(employee_id: str) -> dict:
+    """
+    جلب آخر ملخص أداء للموظف
+    """
+    try:
+        db = get_db()
+        if not db:
+            return None
+        
+        query = db.collection('employee_summaries')\
+                  .where('employee_id', '==', employee_id)\
+                  .order_by('processing_date', direction=firestore.Query.DESCENDING)\
+                  .limit(1)
+        
+        docs = list(query.stream())
+        if docs:
+            data = docs[0].to_dict()
+            data['id'] = docs[0].id
+            return data
+        
+        return None
+        
+    except Exception as e:
+        print(f"❌ خطأ في جلب آخر ملخص: {str(e)}")
+        return None
+
+def delete_employee_summaries(employee_id: str, processing_date: str = None) -> bool:
+    """
+    حذف ملخصات الأداء للموظف
+    إذا تم تحديد تاريخ معالجة، يتم حذف ملخصات ذلك التاريخ فقط
+    """
+    try:
+        db = get_db()
+        if not db:
+            return False
+        
+        if processing_date:
+            # حذف ملخصات معالجة محددة
+            query = db.collection('employee_summaries')\
+                      .where('employee_id', '==', employee_id)\
+                      .where('processing_date', '==', processing_date)
+        else:
+            # حذف جميع ملخصات الموظف
+            query = db.collection('employee_summaries').where('employee_id', '==', employee_id)
+        
+        deleted_count = 0
+        for doc in query.stream():
+            doc.reference.delete()
+            deleted_count += 1
+        
+        if processing_date:
+            print(f"🗑️ تم حذف {deleted_count} ملخص للموظف {employee_id} - معالجة {processing_date}")
+        else:
+            print(f"🗑️ تم حذف {deleted_count} ملخص للموظف {employee_id}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ خطأ في حذف ملخصات الأداء: {str(e)}")
+        return False
+
 # تهيئة Firebase عند استيراد الملف
 if __name__ != "__main__":
     initialize_firebase()

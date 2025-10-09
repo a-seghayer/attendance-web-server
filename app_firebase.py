@@ -793,9 +793,6 @@ def create_request_endpoint():
         kind = data.get("kind", "").strip()
         req_date = data.get("date", "").strip()
         reason = data.get("reason", "").strip()
-        work_mode = (data.get("work_mode") or "office").strip().lower()  # office | remote
-        start_time = (data.get("start_time") or "").strip()
-        end_time = (data.get("end_time") or "").strip()
         
         if not employee_id or not kind or not req_date:
             return jsonify({"error": "معرف الموظف ونوع الطلب والتاريخ مطلوبة"}), 400
@@ -809,42 +806,48 @@ def create_request_endpoint():
             "kind": kind,
             "date": req_date,
             "reason": reason,
-            "supervisor": request.user.get("sub", ""),
-            "work_mode": work_mode if kind == "overtime" else None
+            "supervisor": request.user.get("sub", "")
         }
         
-        # إضافة ساعات/تفاصيل الإضافي إذا كان النوع overtime
+        # إضافة بيانات العمل الإضافي إذا كان النوع overtime
         if kind == "overtime":
-            if work_mode not in ["office", "remote"]:
-                return jsonify({"error": "وضع العمل غير صالح. المسموح: office أو remote"}), 400
-
-            if work_mode == "remote":
-                # يتطلب تحديد وقت البداية والنهاية
+            work_location = data.get("work_location", "office")  # افتراضي: في المكتب
+            request_data["work_location"] = work_location
+            
+            # إضافة أوقات العمل عن بُعد إذا كان remote
+            if work_location == "remote":
+                start_time = data.get("start_time", "").strip()
+                end_time = data.get("end_time", "").strip()
+                
                 if not start_time or not end_time:
-                    return jsonify({"error": "للعمل عن بُعد، وقت البداية ووقت النهاية مطلوبان"}), 400
-                # حساب الساعات من HH:MM
+                    return jsonify({"error": "ساعة البداية والنهاية مطلوبتان للعمل عن بُعد"}), 400
+                
+                # التحقق من صحة تنسيق الوقت
                 try:
-                    sh, sm = [int(x) for x in start_time.split(":")]
-                    eh, em = [int(x) for x in end_time.split(":")]
-                    start_minutes = sh * 60 + sm
-                    end_minutes = eh * 60 + em
-                    if end_minutes <= start_minutes:
+                    from datetime import datetime
+                    start_dt = datetime.strptime(start_time, "%H:%M")
+                    end_dt = datetime.strptime(end_time, "%H:%M")
+                    
+                    if start_dt >= end_dt:
                         return jsonify({"error": "وقت النهاية يجب أن يكون بعد وقت البداية"}), 400
-                    minutes = end_minutes - start_minutes
-                    hours_val = round(minutes / 60.0, 2)
-                    request_data["hours"] = hours_val
-                    request_data["remote_start"] = start_time
-                    request_data["remote_end"] = end_time
-                except Exception:
-                    return jsonify({"error": "صيغة الوقت غير صحيحة. استخدم HH:MM"}), 400
+                    
+                    # حساب ساعات العمل عن بُعد
+                    time_diff = end_dt - start_dt
+                    hours = time_diff.total_seconds() / 3600
+                    
+                    request_data["start_time"] = start_time
+                    request_data["end_time"] = end_time
+                    request_data["hours"] = round(hours, 2)
+                    
+                except ValueError:
+                    return jsonify({"error": "تنسيق الوقت غير صحيح. استخدم HH:MM"}), 400
             else:
-                # office: لا نفرض ساعات عند الإنشاء، يمكن احتسابها لاحقاً من البصمة
-                hours = data.get("hours")
-                if hours not in (None, ""):
-                    try:
-                        request_data["hours"] = float(hours)
-                    except (ValueError, TypeError):
-                        return jsonify({"error": "ساعات الإضافي يجب أن تكون رقماً"}), 400
+                # للعمل في المكتب، يمكن إضافة ساعات اختيارية
+                hours = data.get("hours", 0)
+                try:
+                    request_data["hours"] = float(hours) if hours else 0
+                except (ValueError, TypeError):
+                    return jsonify({"error": "ساعات الإضافي يجب أن تكون رقماً"}), 400
         
         # إضافة تاريخ النهاية إذا كان النوع leave
         if kind == "leave":
@@ -1361,6 +1364,44 @@ def process_attendance():
                     summary_buffer.seek(0)
                     zip_file.writestr(get_translation(language, 'summary_filename'), summary_buffer.getvalue())
                     print(f"✅ تم إنشاء ملف الملخص مع {len(summary_results)} موظف")
+                    
+                    # حفظ ملخص الأداء في قاعدة البيانات
+                    print("💾 بدء حفظ ملخصات الأداء في قاعدة البيانات...")
+                    try:
+                        from firebase_config import save_employee_summaries_batch
+                        
+                        # تاريخ المعالجة الحالي
+                        processing_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        
+                        # تحويل بيانات الملخص إلى تنسيق مناسب للحفظ
+                        summary_records = []
+                        for result in summary_results:
+                            record = {
+                                'employee_id': str(result.get('EmployeeID', '')),
+                                'name': result.get('Name', ''),
+                                'department': result.get('Department', ''),
+                                'work_days': result.get('WorkDays', 0),
+                                'absent_days': result.get('AbsentDays', 0),
+                                'worked_on_holidays': result.get('WorkedOnHolidays', 0),
+                                'extra_days': result.get('ExtraDays', 0),
+                                'total_hours': round(result.get('TotalHours', 0), 2),
+                                'overtime_hours': round(result.get('OvertimeHours', 0), 2),
+                                'requested_overtime_hours': round(result.get('RequestedOvertimeHours', 0), 2),
+                                'delay_hours': round(result.get('DelayHours', 0), 2),
+                                'overtime_requests_count': result.get('OvertimeRequestsCount', 0),
+                                'leave_requests_count': result.get('LeaveRequestsCount', 0),
+                                'assumed_exit_days': result.get('AssumedExitDays', 0)
+                            }
+                            summary_records.append(record)
+                        
+                        # حفظ السجلات دفعة واحدة
+                        if summary_records:
+                            save_stats = save_employee_summaries_batch(summary_records, processing_date)
+                            print(f"✅ تم حفظ ملخصات الأداء: جديد={save_stats.get('created', 0)}, أخطاء={save_stats.get('errors', 0)}")
+                        
+                    except Exception as save_error:
+                        print(f"⚠️ خطأ في حفظ ملخصات الأداء: {save_error}")
+                        # لا نوقف المعالجة بسبب خطأ الحفظ
                 
                 # إنشاء ملف التفاصيل اليومية إذا كان مطلوباً
                 if include_daily:
@@ -1414,6 +1455,54 @@ def process_attendance():
                     daily_buffer.seek(0)
                     zip_file.writestr(get_translation(language, 'daily_filename'), daily_buffer.getvalue())
                     print(f"✅ تم إنشاء ملف التفاصيل اليومية مع {len(daily_results)} سجل")
+                    
+                    # حفظ الأداء اليومي في قاعدة البيانات
+                    print("💾 بدء حفظ الأداء اليومي في قاعدة البيانات...")
+                    try:
+                        from firebase_config import save_daily_performance_batch
+                        
+                        # تحويل البيانات اليومية إلى تنسيق مناسب للحفظ
+                        performance_records = []
+                        for daily in daily_results:
+                            # استخراج أول وآخر وقت
+                            times_list = daily.get('TimesList', '')
+                            first_in = ''
+                            last_out = ''
+                            if times_list:
+                                times = times_list.split(',')
+                                if len(times) >= 1:
+                                    first_in = times[0].strip()
+                                if len(times) >= 2:
+                                    last_out = times[-1].strip()
+                            
+                            record = {
+                                'employee_id': str(daily.get('EmployeeID', '')),
+                                'name': daily.get('Name', ''),
+                                'department': daily.get('Department', ''),
+                                'date': str(daily.get('Date', '')),
+                                'first_in': first_in,
+                                'last_out': last_out,
+                                'work_hours': round(daily.get('DayHours', 0), 2),
+                                'overtime_hours': round(daily.get('DayOvertimeHours', 0), 2),
+                                'delay_hours': round(daily.get('DayDelayHours', 0), 2),
+                                'times_count': daily.get('TimesCount', 0),
+                                'is_holiday': daily.get('IsHoliday', 0) == 1,
+                                'has_overtime_request': daily.get('HasOvertimeRequest', False),
+                                'has_leave_request': daily.get('HasLeaveRequest', False),
+                                'overtime_request_reason': daily.get('OvertimeRequestReason', ''),
+                                'leave_request_reason': daily.get('LeaveRequestReason', ''),
+                                'all_times': times_list
+                            }
+                            performance_records.append(record)
+                        
+                        # حفظ السجلات دفعة واحدة
+                        if performance_records:
+                            save_stats = save_daily_performance_batch(performance_records)
+                            print(f"✅ تم حفظ الأداء اليومي: جديد={save_stats.get('created', 0)}, محدث={save_stats.get('updated', 0)}")
+                        
+                    except Exception as save_error:
+                        print(f"⚠️ خطأ في حفظ الأداء اليومي: {save_error}")
+                        # لا نوقف المعالجة بسبب خطأ الحفظ
             
             zip_buffer.seek(0)
             
@@ -2132,6 +2221,165 @@ def upload_employees_excel(current_user):
         traceback.print_exc()
         return jsonify({"error": f"خطأ في معالجة الملف: {str(e)}"}), 500
 
+
+# === API endpoints للأداء اليومي ===
+
+@app.route("/api/employees/<employee_id>", methods=["GET"])
+@token_required
+def get_employee_details(current_user, employee_id):
+    """جلب تفاصيل موظف معين بواسطة رقمه"""
+    try:
+        from firebase_config import get_employee_by_id
+        
+        print(f"📊 جلب تفاصيل الموظف {employee_id}")
+        
+        employee = get_employee_by_id(employee_id)
+        
+        if not employee:
+            return jsonify({"error": "الموظف غير موجود"}), 404
+        
+        return jsonify(employee)
+        
+    except Exception as e:
+        print(f"❌ خطأ في جلب تفاصيل الموظف: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/employees/<employee_id>/performance", methods=["GET"])
+@token_required
+def get_employee_performance_data(current_user, employee_id):
+    """جلب الأداء اليومي لموظف معين"""
+    try:
+        from firebase_config import get_employee_performance
+        
+        # استخراج فلاتر التاريخ من query parameters
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
+        print(f"📊 جلب الأداء اليومي للموظف {employee_id}")
+        if start_date or end_date:
+            print(f"   الفترة: من {start_date or 'البداية'} إلى {end_date or 'النهاية'}")
+        
+        performance_data = get_employee_performance(employee_id, start_date, end_date)
+        
+        return jsonify({
+            "employee_id": employee_id,
+            "total_records": len(performance_data),
+            "performance": performance_data
+        })
+        
+    except Exception as e:
+        print(f"❌ خطأ في جلب الأداء اليومي: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/performance/save", methods=["POST"])
+@token_required
+def save_performance_data(current_user):
+    """حفظ سجلات الأداء اليومي"""
+    try:
+        from firebase_config import save_daily_performance_batch
+        
+        data = request.get_json()
+        performance_records = data.get('performance_records', [])
+        
+        if not performance_records:
+            return jsonify({"error": "لا توجد سجلات للحفظ"}), 400
+        
+        print(f"💾 حفظ {len(performance_records)} سجل أداء يومي")
+        
+        result = save_daily_performance_batch(performance_records)
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        print(f"❌ خطأ في حفظ الأداء اليومي: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/employees/<employee_id>/performance", methods=["DELETE"])
+@token_required
+def delete_employee_performance_data(current_user, employee_id):
+    """حذف سجلات الأداء اليومي لموظف"""
+    try:
+        from firebase_config import delete_employee_performance
+        
+        # استخراج تاريخ محدد (اختياري)
+        date = request.args.get('date')
+        
+        print(f"🗑️ حذف أداء الموظف {employee_id}" + (f" - التاريخ: {date}" if date else " - جميع السجلات"))
+        
+        success = delete_employee_performance(employee_id, date)
+        
+        if success:
+            return jsonify({"message": "تم الحذف بنجاح"})
+        else:
+            return jsonify({"error": "فشل الحذف"}), 500
+        
+    except Exception as e:
+        print(f"❌ خطأ في حذف الأداء اليومي: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/employees/<employee_id>/summaries", methods=["GET"])
+@token_required
+def get_employee_summaries_data(current_user, employee_id):
+    """جلب ملخصات الأداء لموظف معين"""
+    try:
+        from firebase_config import get_employee_summaries
+        
+        print(f"📊 جلب ملخصات الأداء للموظف {employee_id}")
+        
+        summaries = get_employee_summaries(employee_id)
+        
+        return jsonify({
+            "employee_id": employee_id,
+            "total_summaries": len(summaries),
+            "summaries": summaries
+        })
+        
+    except Exception as e:
+        print(f"❌ خطأ في جلب ملخصات الأداء: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/employees/<employee_id>/summaries/latest", methods=["GET"])
+@token_required
+def get_employee_latest_summary(current_user, employee_id):
+    """جلب آخر ملخص أداء لموظف"""
+    try:
+        from firebase_config import get_latest_employee_summary
+        
+        print(f"📊 جلب آخر ملخص للموظف {employee_id}")
+        
+        summary = get_latest_employee_summary(employee_id)
+        
+        if not summary:
+            return jsonify({"message": "لا توجد ملخصات متاحة"}), 404
+        
+        return jsonify(summary)
+        
+    except Exception as e:
+        print(f"❌ خطأ في جلب آخر ملخص: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/employees/<employee_id>/summaries", methods=["DELETE"])
+@token_required
+def delete_employee_summaries_data(current_user, employee_id):
+    """حذف ملخصات الأداء لموظف"""
+    try:
+        from firebase_config import delete_employee_summaries
+        
+        # استخراج تاريخ معالجة محدد (اختياري)
+        processing_date = request.args.get('processing_date')
+        
+        print(f"🗑️ حذف ملخصات الموظف {employee_id}" + (f" - معالجة {processing_date}" if processing_date else " - جميع الملخصات"))
+        
+        success = delete_employee_summaries(employee_id, processing_date)
+        
+        if success:
+            return jsonify({"message": "تم الحذف بنجاح"})
+        else:
+            return jsonify({"error": "فشل الحذف"}), 500
+        
+    except Exception as e:
+        print(f"❌ خطأ في حذف ملخصات الأداء: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 # === نقاط النهاية العامة ===
 
